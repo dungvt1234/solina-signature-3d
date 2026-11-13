@@ -148,6 +148,40 @@ function createSiteGroundTexture(renderer: THREE.WebGLRenderer): THREE.CanvasTex
   return tex;
 }
 
+function createCrownSignTexture(title: string, subtitle: string): THREE.CanvasTexture {
+  const w = 1024;
+  const h = 256;
+  const c = document.createElement('canvas');
+  c.width = w;
+  c.height = h;
+  const ctx = c.getContext('2d')!;
+
+  // Deep ocean-metallic sign background
+  ctx.fillStyle = '#0e2338';
+  ctx.fillRect(0, 0, w, h);
+
+  // Luxury gold pinstripe border
+  ctx.strokeStyle = '#c9a56a';
+  ctx.lineWidth = 6;
+  ctx.strokeRect(14, 14, w - 28, h - 28);
+
+  // Main brand title
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 64px "Cormorant Garamond", Georgia, serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(title, w / 2, 92);
+
+  // Wyndham luxury subtitle
+  ctx.fillStyle = '#dfbb7c';
+  ctx.font = '600 28px "Plus Jakarta Sans", sans-serif';
+  ctx.fillText(subtitle, w / 2, 168);
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
 export function buildSolinaMasterplan(
   scene: THREE.Scene,
   renderer: THREE.WebGLRenderer,
@@ -228,6 +262,60 @@ export function buildSolinaMasterplan(
       emissive: new THREE.Color(0xffc068),
       emissiveIntensity: 1.8,
       roughness: 0.2,
+    })
+  );
+  const balconyGlassMat = track(
+    new THREE.MeshPhysicalMaterial({
+      color: 0x98d4f4,
+      transparent: true,
+      opacity: 0.58,
+      roughness: 0.08,
+      metalness: 0.35,
+      clearcoat: 1.0,
+      clearcoatRoughness: 0.06,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    })
+  );
+  const handrailMat = track(
+    new THREE.MeshStandardMaterial({
+      color: 0x22384a,
+      roughness: 0.22,
+      metalness: 0.85,
+    })
+  );
+  const balconyLedMat = track(
+    new THREE.MeshStandardMaterial({
+      color: 0xfff2dc,
+      emissive: new THREE.Color(0xffbf69),
+      emissiveIntensity: 1.35,
+      roughness: 0.2,
+    })
+  );
+  const crownSignTexB = track(
+    createCrownSignTexture('SOLINA SIGNATURE', 'WYNDHAM HOTELS & RESORTS')
+  );
+  const crownSignTexA = track(
+    createCrownSignTexture('SOLINA SIGNATURE', 'LUXURY TOWER RESIDENCES')
+  );
+  const crownSignMatB = track(
+    new THREE.MeshStandardMaterial({
+      map: crownSignTexB,
+      emissiveMap: crownSignTexB,
+      emissive: new THREE.Color(0xffe6be),
+      emissiveIntensity: 0.95,
+      roughness: 0.25,
+      metalness: 0.45,
+    })
+  );
+  const crownSignMatA = track(
+    new THREE.MeshStandardMaterial({
+      map: crownSignTexA,
+      emissiveMap: crownSignTexA,
+      emissive: new THREE.Color(0xffe6be),
+      emissiveIntensity: 0.95,
+      roughness: 0.25,
+      metalness: 0.45,
     })
   );
   const grassMat = track(
@@ -782,8 +870,7 @@ export function buildSolinaMasterplan(
     { w: 9.2, d: 5.2, cz: 5.2, floors: 29, r: 1.5 },
   ];
 
-  // Collect balcony instances for Tower B Wing 1
-  const bSlabMatrices: THREE.Matrix4[] = [];
+  // Build rounded balconies, curved glass balustrades, top handrails & LED ribbons for Wing 1
   const bTerraceMatrices: THREE.Matrix4[] = [];
   const dummy = new THREE.Object3D();
 
@@ -805,14 +892,90 @@ export function buildSolinaMasterplan(
     bCoastGroup.add(coreMesh);
     towerMeshes.push(coreMesh);
 
-    // Every floor slab in this tier
+    // Rounded slab shape for this tier
+    const slabShape = makeRoundedRectShape(tier.w, tier.d, tier.r);
+    const slabGeo = track(
+      new THREE.ExtrudeGeometry(slabShape, {
+        depth: 0.22,
+        bevelEnabled: false,
+        curveSegments: 14,
+      })
+    );
+    slabGeo.rotateX(-Math.PI / 2);
+
+    // Curved glass balustrade shape
+    const railingShape = makeRoundedRectShape(tier.w, tier.d, tier.r);
+    railingShape.holes.push(
+      makeRoundedRectShape(tier.w - 0.16, tier.d - 0.16, Math.max(0.2, tier.r - 0.08))
+    );
+    const railingGeo = track(
+      new THREE.ExtrudeGeometry(railingShape, {
+        depth: 0.36,
+        bevelEnabled: false,
+        curveSegments: 14,
+      })
+    );
+    railingGeo.rotateX(-Math.PI / 2);
+
+    // Sleek metallic top handrail
+    const handrailGeo = track(
+      new THREE.ExtrudeGeometry(railingShape, {
+        depth: 0.035,
+        bevelEnabled: false,
+        curveSegments: 14,
+      })
+    );
+    handrailGeo.rotateX(-Math.PI / 2);
+
+    // Underside warm architectural LED ribbon
+    const ledGeo = track(
+      new THREE.ExtrudeGeometry(railingShape, {
+        depth: 0.045,
+        bevelEnabled: false,
+        curveSegments: 14,
+      })
+    );
+    ledGeo.rotateX(-Math.PI / 2);
+
+    const tierSlabs = new THREE.InstancedMesh(slabGeo, whiteSlabMat, tier.floors + 1);
+    const tierRailings = new THREE.InstancedMesh(railingGeo, balconyGlassMat, tier.floors);
+    const tierHandrails = new THREE.InstancedMesh(handrailGeo, handrailMat, tier.floors);
+    const tierLeds = new THREE.InstancedMesh(ledGeo, balconyLedMat, tier.floors);
+
     for (let f = 0; f <= tier.floors; f++) {
       dummy.position.set(0, 2.9 + f * floorH, tier.cz);
       dummy.rotation.set(0, 0, 0);
-      dummy.scale.set(tier.w, 1, tier.d);
+      dummy.scale.set(1, 1, 1);
       dummy.updateMatrix();
-      bSlabMatrices.push(dummy.matrix.clone());
+      tierSlabs.setMatrixAt(f, dummy.matrix);
+
+      if (f >= 1) {
+        dummy.position.set(0, 2.9 + f * floorH + 0.22, tier.cz);
+        dummy.updateMatrix();
+        tierRailings.setMatrixAt(f - 1, dummy.matrix);
+
+        dummy.position.set(0, 2.9 + f * floorH + 0.22 + 0.36, tier.cz);
+        dummy.updateMatrix();
+        tierHandrails.setMatrixAt(f - 1, dummy.matrix);
+
+        dummy.position.set(0, 2.9 + f * floorH + 0.17, tier.cz);
+        dummy.updateMatrix();
+        tierLeds.setMatrixAt(f - 1, dummy.matrix);
+      }
     }
+    tierSlabs.instanceMatrix.needsUpdate = true;
+    tierSlabs.computeBoundingSphere();
+    tierSlabs.castShadow = !isSoftwareGl;
+    tierSlabs.receiveShadow = true;
+
+    tierRailings.instanceMatrix.needsUpdate = true;
+    tierRailings.computeBoundingSphere();
+    tierHandrails.instanceMatrix.needsUpdate = true;
+    tierHandrails.computeBoundingSphere();
+    tierLeds.instanceMatrix.needsUpdate = true;
+    tierLeds.computeBoundingSphere();
+
+    bCoastGroup.add(tierSlabs, tierRailings, tierHandrails, tierLeds);
 
     // Lush green rooftop terrace garden on each stepped roof
     const garden = new THREE.Mesh(
@@ -833,20 +996,6 @@ export function buildSolinaMasterplan(
       bTerraceMatrices.push(dummy.matrix.clone());
     }
   });
-
-  // Instanced horizontal balcony slabs for Wing 1
-  const bSlabGeo = track(new THREE.BoxGeometry(1, 0.2, 1));
-  const bSlabInst = new THREE.InstancedMesh(
-    bSlabGeo,
-    whiteSlabMat,
-    bSlabMatrices.length
-  );
-  bSlabMatrices.forEach((m, i) => bSlabInst.setMatrixAt(i, m));
-  bSlabInst.instanceMatrix.needsUpdate = true;
-  bSlabInst.computeBoundingSphere();
-  bSlabInst.castShadow = !isSoftwareGl;
-  bSlabInst.receiveShadow = true;
-  bCoastGroup.add(bSlabInst);
 
   // Terrace shrubs instanced mesh for Wing 1
   if (bTerraceMatrices.length > 0) {
@@ -934,6 +1083,64 @@ export function buildSolinaMasterplan(
   wingSlabs.receiveShadow = true;
   bWingGroup.add(wingSlabs);
 
+  // Wing 2 Curved Glass Balustrades, Metallic Handrails & Underside LED Ribbons
+  const wingRailingShape = makeRoundedRectShape(14.0, 8.6, 2.0);
+  wingRailingShape.holes.push(makeRoundedRectShape(13.84, 8.44, 1.92));
+
+  const wingRailingGeo = track(
+    new THREE.ExtrudeGeometry(wingRailingShape, {
+      depth: 0.36,
+      bevelEnabled: false,
+      curveSegments: 14,
+    })
+  );
+  wingRailingGeo.rotateX(-Math.PI / 2);
+
+  const wingHandrailGeo = track(
+    new THREE.ExtrudeGeometry(wingRailingShape, {
+      depth: 0.035,
+      bevelEnabled: false,
+      curveSegments: 14,
+    })
+  );
+  wingHandrailGeo.rotateX(-Math.PI / 2);
+
+  const wingLedGeo = track(
+    new THREE.ExtrudeGeometry(wingRailingShape, {
+      depth: 0.045,
+      bevelEnabled: false,
+      curveSegments: 14,
+    })
+  );
+  wingLedGeo.rotateX(-Math.PI / 2);
+
+  const wingRailings = new THREE.InstancedMesh(wingRailingGeo, balconyGlassMat, wingFloors);
+  const wingHandrails = new THREE.InstancedMesh(wingHandrailGeo, handrailMat, wingFloors);
+  const wingLeds = new THREE.InstancedMesh(wingLedGeo, balconyLedMat, wingFloors);
+
+  for (let f = 1; f <= wingFloors; f++) {
+    dummy.position.set(0, 2.9 + f * floorH + 0.22, 0);
+    dummy.rotation.set(0, 0, 0);
+    dummy.scale.set(1, 1, 1);
+    dummy.updateMatrix();
+    wingRailings.setMatrixAt(f - 1, dummy.matrix);
+
+    dummy.position.set(0, 2.9 + f * floorH + 0.22 + 0.36, 0);
+    dummy.updateMatrix();
+    wingHandrails.setMatrixAt(f - 1, dummy.matrix);
+
+    dummy.position.set(0, 2.9 + f * floorH + 0.17, 0);
+    dummy.updateMatrix();
+    wingLeds.setMatrixAt(f - 1, dummy.matrix);
+  }
+  wingRailings.instanceMatrix.needsUpdate = true;
+  wingRailings.computeBoundingSphere();
+  wingHandrails.instanceMatrix.needsUpdate = true;
+  wingHandrails.computeBoundingSphere();
+  wingLeds.instanceMatrix.needsUpdate = true;
+  wingLeds.computeBoundingSphere();
+  bWingGroup.add(wingRailings, wingHandrails, wingLeds);
+
   // Vertical bronze fins along Wing 2 facing Tower A & Ocean
   const bWingFinGeo = track(new THREE.BoxGeometry(0.24, wingH + 1.0, 0.45));
   const bWingFinOffsets: [number, number][] = [
@@ -984,6 +1191,16 @@ export function buildSolinaMasterplan(
   );
   bCrownLed.position.set(0.6, bTopY + 2.2, 1.3);
   bWingGroup.add(bCrownLed);
+
+  // Illuminated "SOLINA SIGNATURE — WYNDHAM" rooftop signage
+  const bSignGeo = track(new THREE.PlaneGeometry(8.2, 1.55));
+  const bSignFront = new THREE.Mesh(bSignGeo, crownSignMatB);
+  bSignFront.position.set(0.6, bTopY + 1.15, -1.02);
+  bSignFront.rotation.y = Math.PI;
+
+  const bSignBack = new THREE.Mesh(bSignGeo, crownSignMatB);
+  bSignBack.position.set(0.6, bTopY + 1.15, 3.62);
+  bWingGroup.add(bSignFront, bSignBack);
 
   towerBGroup.add(bWingGroup);
   root.add(towerBGroup);
@@ -1059,6 +1276,64 @@ export function buildSolinaMasterplan(
   aSlabInst.receiveShadow = true;
   towerAGroup.add(aSlabInst);
 
+  // Tower A Curved Glass Balustrades, Metallic Handrails & Underside LED Ribbons
+  const aRailingShape = makeRoundedRectShape(10.8, 13.8, 2.9);
+  aRailingShape.holes.push(makeRoundedRectShape(10.64, 13.64, 2.82));
+
+  const aRailingGeo = track(
+    new THREE.ExtrudeGeometry(aRailingShape, {
+      depth: 0.36,
+      bevelEnabled: false,
+      curveSegments: 18,
+    })
+  );
+  aRailingGeo.rotateX(-Math.PI / 2);
+
+  const aHandrailGeo = track(
+    new THREE.ExtrudeGeometry(aRailingShape, {
+      depth: 0.035,
+      bevelEnabled: false,
+      curveSegments: 18,
+    })
+  );
+  aHandrailGeo.rotateX(-Math.PI / 2);
+
+  const aLedGeo = track(
+    new THREE.ExtrudeGeometry(aRailingShape, {
+      depth: 0.045,
+      bevelEnabled: false,
+      curveSegments: 18,
+    })
+  );
+  aLedGeo.rotateX(-Math.PI / 2);
+
+  const aRailings = new THREE.InstancedMesh(aRailingGeo, balconyGlassMat, aFloors);
+  const aHandrails = new THREE.InstancedMesh(aHandrailGeo, handrailMat, aFloors);
+  const aLeds = new THREE.InstancedMesh(aLedGeo, balconyLedMat, aFloors);
+
+  for (let f = 1; f <= aFloors; f++) {
+    dummy.position.set(0, 2.9 + f * floorH + 0.22, 0);
+    dummy.rotation.set(0, 0, 0);
+    dummy.scale.set(1, 1, 1);
+    dummy.updateMatrix();
+    aRailings.setMatrixAt(f - 1, dummy.matrix);
+
+    dummy.position.set(0, 2.9 + f * floorH + 0.22 + 0.36, 0);
+    dummy.updateMatrix();
+    aHandrails.setMatrixAt(f - 1, dummy.matrix);
+
+    dummy.position.set(0, 2.9 + f * floorH + 0.17, 0);
+    dummy.updateMatrix();
+    aLeds.setMatrixAt(f - 1, dummy.matrix);
+  }
+  aRailings.instanceMatrix.needsUpdate = true;
+  aRailings.computeBoundingSphere();
+  aHandrails.instanceMatrix.needsUpdate = true;
+  aHandrails.computeBoundingSphere();
+  aLeds.instanceMatrix.needsUpdate = true;
+  aLeds.computeBoundingSphere();
+  towerAGroup.add(aRailings, aHandrails, aLeds);
+
   // Vertical bronze architectural fins around Tower A
   const aFinGeo = track(new THREE.BoxGeometry(0.22, aH + 1.2, 0.42));
   const aFinInst = new THREE.InstancedMesh(aFinGeo, towerFinMat, 8);
@@ -1106,6 +1381,17 @@ export function buildSolinaMasterplan(
   const aCrownLed = new THREE.Mesh(aCrownLedGeo, warmLedRimMat);
   aCrownLed.position.y = aTopY + 0.15;
   towerAGroup.add(aCrownLed);
+
+  // Illuminated "SOLINA SIGNATURE — TOWER A" rooftop signage
+  const aSignGeo = track(new THREE.PlaneGeometry(7.2, 1.55));
+  const aSignSide1 = new THREE.Mesh(aSignGeo, crownSignMatA);
+  aSignSide1.position.set(-4.62, aTopY + 1.2, 0.4);
+  aSignSide1.rotation.y = -Math.PI / 2;
+
+  const aSignSide2 = new THREE.Mesh(aSignGeo, crownSignMatA);
+  aSignSide2.position.set(4.62, aTopY + 1.2, 0.4);
+  aSignSide2.rotation.y = Math.PI / 2;
+  towerAGroup.add(aSignSide1, aSignSide2);
 
   root.add(towerAGroup);
 
@@ -1307,6 +1593,10 @@ export function buildSolinaMasterplan(
       towerGlassMat.emissiveIntensity = 0.68;
       lobbyGlowMat.emissiveIntensity = 1.55;
       warmLedRimMat.emissiveIntensity = 1.85;
+      balconyLedMat.emissiveIntensity = 1.65;
+      balconyLedMat.emissive.setHex(0xffaa50);
+      crownSignMatB.emissiveIntensity = 1.25;
+      crownSignMatA.emissiveIntensity = 1.25;
       pavGlowMat.emissiveIntensity = 1.65;
       pavLight.intensity = 5.5;
       courtyardBounce.intensity = 2.4;
@@ -1329,6 +1619,10 @@ export function buildSolinaMasterplan(
       towerGlassMat.emissiveIntensity = 0.36;
       lobbyGlowMat.emissiveIntensity = 0.5;
       warmLedRimMat.emissiveIntensity = 0.45;
+      balconyLedMat.emissiveIntensity = 0.38;
+      balconyLedMat.emissive.setHex(0xffffff);
+      crownSignMatB.emissiveIntensity = 0.45;
+      crownSignMatA.emissiveIntensity = 0.45;
       pavGlowMat.emissiveIntensity = 0.4;
       pavLight.intensity = 1.2;
       courtyardBounce.intensity = 0.8;
@@ -1351,6 +1645,10 @@ export function buildSolinaMasterplan(
       towerGlassMat.emissiveIntensity = 0.88;
       lobbyGlowMat.emissiveIntensity = 1.85;
       warmLedRimMat.emissiveIntensity = 2.1;
+      balconyLedMat.emissiveIntensity = 2.35;
+      balconyLedMat.emissive.setHex(0xffc570);
+      crownSignMatB.emissiveIntensity = 1.85;
+      crownSignMatA.emissiveIntensity = 1.85;
       pavGlowMat.emissiveIntensity = 2.0;
       pavLight.intensity = 7.0;
       courtyardBounce.intensity = 3.2;
