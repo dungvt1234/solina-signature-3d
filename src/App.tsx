@@ -9,10 +9,14 @@ import {
   ChevronUp,
   Compass,
   Eye,
+  EyeOff,
   Footprints,
+  Globe,
   Home,
+  Info,
   Layers,
   Map as MapIcon,
+  MapPin,
   Moon,
   Mountain,
   Pause,
@@ -39,7 +43,9 @@ import {
   MasterplanCameraPreset,
   PROJECT_UNITS,
   ProjectUnit,
+  SOLINA_GEO,
   WorldMode,
+  bearingToCompassInfo,
   formatUnitCodeForFloor,
   getUnitBalconyView,
 } from './scene/masterplanData';
@@ -66,15 +72,31 @@ export default function App() {
     activeLayout.rooms[0]
   );
   const [dockCollapsed, setDockCollapsed] = useState(false);
+  const [infoCardVisible, setInfoCardVisible] = useState(true);
   const [mapOpen, setMapOpen] = useState(false);
   const [towerFilter, setTowerFilter] = useState<'ALL' | 'A' | 'B'>('ALL');
   const [showWalkPad, setShowWalkPad] = useState(false);
   const [unitPanoramaMode, setUnitPanoramaMode] = useState(false);
+  const [satelliteOverlay, setSatelliteOverlay] = useState(true);
+  const [showSurroundingsHighlights, setShowSurroundingsHighlights] =
+    useState(false);
+  const [cameraBearingDeg, setCameraBearingDeg] = useState<number>(
+    SOLINA_GEO.oceanBearingDeg
+  );
+  const [lookBearingTarget, setLookBearingTarget] = useState<{
+    bearingDeg: number;
+    nonce: number;
+  } | null>(null);
   const [hoveredTowerFloor, setHoveredTowerFloor] = useState<{
     tower: 'A' | 'B';
     floor: number;
   } | null>(null);
   const [flycamAutoOrbit, setFlycamAutoOrbit] = useState(true);
+  const [flycamOrbitMode, setFlycamOrbitMode] = useState<'close' | 'high_lap'>(
+    'close'
+  );
+  const [flycamLapNonce, setFlycamLapNonce] = useState(0);
+  const [flycamLapPct, setFlycamLapPct] = useState<number | null>(null);
   const [flycamAltitude, setFlycamAltitude] = useState(28);
   const [flycamWaypointTarget, setFlycamWaypointTarget] = useState<{
     waypoint: FlycamWaypoint;
@@ -192,11 +214,25 @@ export default function App() {
     setUnitPanoramaMode(false);
     setWorldMode('masterplan');
     setMasterplanPreset(flycamPreset);
+    setFlycamOrbitMode('close');
+    setFlycamLapPct(null);
+    setFlycamAutoOrbit(true);
+  }, [flycamPreset]);
+
+  const handleStartHighFlycamLap = useCallback(() => {
+    setUnitPanoramaMode(false);
+    setWorldMode('masterplan');
+    setSatelliteOverlay(true);
+    setMasterplanPreset(flycamPreset);
+    setFlycamOrbitMode('high_lap');
+    setFlycamLapPct(0);
+    setFlycamLapNonce((n) => n + 1);
     setFlycamAutoOrbit(true);
   }, [flycamPreset]);
 
   const handleSelectFlycamWaypoint = useCallback((waypoint: FlycamWaypoint) => {
     setFlycamAutoOrbit(false);
+    setFlycamLapPct(null);
     setFlycamWaypointTarget((prev) => ({
       waypoint,
       nonce: (prev?.nonce ?? 0) + 1,
@@ -214,6 +250,8 @@ export default function App() {
       }
       if (e.code === 'KeyH') {
         setDockCollapsed((v) => !v);
+      } else if (e.code === 'KeyI') {
+        setInfoCardVisible((v) => !v);
       } else if (e.code === 'KeyM') {
         setMapOpen((v) => !v);
       } else if (e.code === 'KeyF') {
@@ -260,6 +298,10 @@ export default function App() {
     () => getUnitBalconyView(selectedUnit, selectedFloor),
     [selectedUnit, selectedFloor]
   );
+  const compassInfo = useMemo(
+    () => bearingToCompassInfo(cameraBearingDeg),
+    [cameraBearingDeg]
+  );
   const floorOptions = useMemo(
     () =>
       Array.from(
@@ -268,6 +310,15 @@ export default function App() {
       ),
     [selectedUnit.maxFloor]
   );
+
+  const handleLookTowardBearing = useCallback((bearingDeg: number) => {
+    setWorldMode('masterplan');
+    setFlycamAutoOrbit(false);
+    setLookBearingTarget((prev) => ({
+      bearingDeg,
+      nonce: (prev?.nonce ?? 0) + 1,
+    }));
+  }, []);
 
   return (
     <main className="relative w-screen h-screen overflow-hidden bg-[#0b131e]">
@@ -281,8 +332,13 @@ export default function App() {
         selectedFloor={selectedFloor}
         masterplanPreset={masterplanPreset}
         unitPanoramaMode={unitPanoramaMode}
+        satelliteOverlay={satelliteOverlay}
+        showSurroundingsHighlights={showSurroundingsHighlights}
         flycamAutoOrbit={flycamAutoOrbit}
+        flycamOrbitMode={flycamOrbitMode}
+        flycamLapNonce={flycamLapNonce}
         flycamWaypointTarget={flycamWaypointTarget}
+        lookBearingTarget={lookBearingTarget}
         teleportTarget={teleportTarget}
         moveInputRef={moveInputRef}
         onRoomChange={setCurrentRoom}
@@ -290,70 +346,121 @@ export default function App() {
         onRequestPovFromDollhouse={handleRequestPovFromDollhouse}
         onSelectTowerFromMasterplan={handleSelectTowerFromMasterplan}
         onHoverTowerFloor={setHoveredTowerFloor}
-        onCancelFlycamAutoOrbit={() => setFlycamAutoOrbit(false)}
+        onCancelFlycamAutoOrbit={() => {
+          setFlycamAutoOrbit(false);
+          setFlycamLapPct(null);
+        }}
+        onFlycamLapProgress={setFlycamLapPct}
+        onCompleteFlycamLap={() => {
+          setFlycamAutoOrbit(false);
+        }}
         onAltitudeChange={setFlycamAltitude}
+        onMasterplanBearingChange={setCameraBearingDeg}
       />
 
-      {/* Minimal Top-Left Project & Location Readout */}
+      {/* Minimal Top-Left Project & Location Readout (Toggleable) */}
       <header className="pointer-events-none fixed top-5 left-5 z-10 max-w-md">
-        <div
-          className="pointer-events-auto inline-flex flex-col rounded-xl border border-white/15 px-4 py-3 shadow-lg"
-          style={{ backgroundColor: 'rgba(11, 18, 30, 0.86)' }}
-        >
-          <div className="flex flex-wrap items-center gap-2 text-xs text-amber-200/90">
-            <span className="font-medium tracking-wide">
-              Solina Signature by Wyndham
-            </span>
-            <span aria-hidden="true">·</span>
-            {worldMode === 'masterplan' && !isUnitPanoramaActive ? (
-              <span>Toàn khu Tháp A (21F) &amp; Tháp B (34F)</span>
-            ) : (
-              <>
-                <span className="font-mono-tabular">{activeUnitCode}</span>
-                <span aria-hidden="true">·</span>
-                <span className="font-mono-tabular">Tầng {selectedFloor}</span>
-                <span aria-hidden="true">·</span>
-                <span className="font-mono-tabular">{selectedUnit.nfa}</span>
-              </>
-            )}
-          </div>
-          <div className="mt-1 flex items-baseline gap-2.5">
-            <h1 className="font-display text-2xl font-semibold text-white leading-tight">
-              {isUnitPanoramaActive
-                ? `View căn ${activeUnitCode}`
-                : worldMode === 'masterplan'
-                  ? masterplanPreset.label
-                  : currentRoom.name}
-            </h1>
-            {isUnitPanoramaActive ? (
-              <span className="font-mono-tabular text-xs text-amber-300">
-                Cao độ ~{activeBalconyView.altMeters} m · {selectedUnit.type}
-              </span>
-            ) : isFlycamActive ? (
-              <span className="font-mono-tabular text-xs text-amber-300">
-                Cao độ {flycamAltitude.toFixed(1)} m ·{' '}
-                {flycamAutoOrbit ? 'Bay vòng tự động' : 'Bay tự do'}
-              </span>
-            ) : (
-              worldMode === 'apartment' && (
-                <span className="font-mono-tabular text-xs text-slate-400">
-                  {currentRoom.areaLabel}
+        {infoCardVisible ? (
+          <div
+            className="pointer-events-auto inline-flex flex-col rounded-xl border border-white/15 px-4 py-3 shadow-lg"
+            style={{ backgroundColor: 'rgba(11, 18, 30, 0.86)' }}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex flex-wrap items-center gap-2 text-xs text-amber-200/90">
+                <span className="font-medium tracking-wide">
+                  Solina Signature by Wyndham
                 </span>
-              )
+                <span aria-hidden="true">·</span>
+                {worldMode === 'masterplan' && !isUnitPanoramaActive ? (
+                  <span>Toàn khu Tháp A (21F) &amp; Tháp B (34F)</span>
+                ) : (
+                  <>
+                    <span className="font-mono-tabular">{activeUnitCode}</span>
+                    <span aria-hidden="true">·</span>
+                    <span className="font-mono-tabular">Tầng {selectedFloor}</span>
+                    <span aria-hidden="true">·</span>
+                    <span className="font-mono-tabular">{selectedUnit.nfa}</span>
+                  </>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => setInfoCardVisible(false)}
+                title="Ẩn bảng thông tin (I)"
+                aria-label="Ẩn bảng thông tin"
+                className="inline-flex items-center gap-1 rounded-md border border-white/15 bg-white/5 px-2 py-0.5 text-[11px] font-medium text-slate-300 hover:bg-white/15 hover:text-white cursor-pointer shrink-0 transition-colors"
+              >
+                <EyeOff className="w-3 h-3" />
+                <span>Ẩn</span>
+              </button>
+            </div>
+            <div className="mt-1 flex items-baseline gap-2.5">
+              <h1 className="font-display text-2xl font-semibold text-white leading-tight">
+                {isUnitPanoramaActive
+                  ? `View căn ${activeUnitCode}`
+                  : worldMode === 'masterplan'
+                    ? masterplanPreset.label
+                    : currentRoom.name}
+              </h1>
+              {isUnitPanoramaActive ? (
+                <span className="font-mono-tabular text-xs text-amber-300">
+                  Cao độ ~{activeBalconyView.altMeters} m · {selectedUnit.type}
+                </span>
+              ) : isFlycamActive ? (
+                <span className="font-mono-tabular text-xs text-amber-300">
+                  Cao độ {flycamAltitude.toFixed(1)} m ·{' '}
+                  {flycamAutoOrbit
+                    ? flycamOrbitMode === 'high_lap'
+                      ? `Bay 1 vòng góc cao${flycamLapPct !== null ? ` (${flycamLapPct}%)` : ''}`
+                      : 'Bay vòng quanh tháp'
+                    : flycamLapPct === 100
+                      ? 'Hoàn tất 1 vòng toàn cảnh'
+                      : 'Bay tự do'}
+                </span>
+              ) : (
+                worldMode === 'apartment' && (
+                  <span className="font-mono-tabular text-xs text-slate-400">
+                    {currentRoom.areaLabel}
+                  </span>
+                )
+              )}
+            </div>
+            <p className="text-xs text-slate-300 mt-0.5 truncate max-w-[380px]">
+              {isUnitPanoramaActive
+                ? activeBalconyView.viewSummary
+                : worldMode === 'masterplan' &&
+                    !masterplanPreset.isPov &&
+                    hoveredTowerFloor
+                  ? `Đang chỉ Tháp ${hoveredTowerFloor.tower} · Tầng ${hoveredTowerFloor.floor} — Nhấn để chọn căn tầng này`
+                  : worldMode === 'masterplan'
+                    ? masterplanPreset.subtitle
+                    : currentRoom.subtitle}
+            </p>
+            {worldMode === 'masterplan' && (
+              <div className="mt-1.5 pt-1.5 border-t border-white/10 flex flex-wrap items-center gap-2 text-[11px] text-sky-300/95">
+                <span className="inline-flex items-center gap-1 font-mono-tabular">
+                  <MapPin className="w-3 h-3" />
+                  {SOLINA_GEO.coordsLabel}
+                </span>
+                <span aria-hidden="true" className="text-slate-500">·</span>
+                <span className="font-mono-tabular text-amber-200">
+                  Hướng nhìn: {cameraBearingDeg}° {compassInfo.short} ({compassInfo.landmark})
+                </span>
+              </div>
             )}
           </div>
-          <p className="text-xs text-slate-300 mt-0.5 truncate max-w-[380px]">
-            {isUnitPanoramaActive
-              ? activeBalconyView.viewSummary
-              : worldMode === 'masterplan' &&
-                  !masterplanPreset.isPov &&
-                  hoveredTowerFloor
-                ? `Đang chỉ Tháp ${hoveredTowerFloor.tower} · Tầng ${hoveredTowerFloor.floor} — Nhấn để chọn căn tầng này`
-                : worldMode === 'masterplan'
-                  ? masterplanPreset.subtitle
-                  : currentRoom.subtitle}
-          </p>
-        </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setInfoCardVisible(true)}
+            title="Hiện bảng thông tin (I)"
+            className="pointer-events-auto inline-flex items-center gap-1.5 rounded-lg border border-white/15 px-3 py-1.5 text-xs font-medium text-slate-200 hover:text-white shadow-lg cursor-pointer transition-colors"
+            style={{ backgroundColor: 'rgba(11, 18, 30, 0.82)' }}
+          >
+            <Info className="w-3.5 h-3.5 text-amber-300" />
+            <span>Thông tin (I)</span>
+          </button>
+        )}
       </header>
 
       {/* Optional On-Screen Walk / Drone Pad */}
@@ -660,25 +767,62 @@ export default function App() {
               <>
                 <button
                   type="button"
-                  onClick={() => setFlycamAutoOrbit((v) => !v)}
+                  onClick={handleStartHighFlycamLap}
                   className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
-                    flycamAutoOrbit
+                    flycamAutoOrbit && flycamOrbitMode === 'high_lap'
+                      ? 'bg-sky-500/30 text-sky-100 border border-sky-400/60 font-semibold'
+                      : 'bg-white/5 text-sky-200 hover:bg-sky-500/20 border border-sky-400/30'
+                  }`}
+                >
+                  <Globe className="w-3.5 h-3.5" />
+                  <span>
+                    {flycamAutoOrbit && flycamOrbitMode === 'high_lap'
+                      ? `Đang bay góc cao (${flycamLapPct ?? 0}%)`
+                      : 'Bay 1 vòng góc cao (250m)'}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (flycamAutoOrbit && flycamOrbitMode === 'close') {
+                      setFlycamAutoOrbit(false);
+                    } else {
+                      setFlycamOrbitMode('close');
+                      setFlycamLapPct(null);
+                      setFlycamAutoOrbit(true);
+                    }
+                  }}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
+                    flycamAutoOrbit && flycamOrbitMode === 'close'
                       ? 'bg-amber-500/25 text-amber-200 border border-amber-400/50'
                       : 'bg-white/5 text-slate-300 hover:bg-white/10 hover:text-white border border-white/10'
                   }`}
                 >
-                  {flycamAutoOrbit ? (
+                  {flycamAutoOrbit && flycamOrbitMode === 'close' ? (
                     <>
                       <Pause className="w-3.5 h-3.5" />
-                      <span>Dừng bay vòng tự động</span>
+                      <span>Dừng bay quanh tháp</span>
                     </>
                   ) : (
                     <>
                       <Play className="w-3.5 h-3.5" />
-                      <span>Bay vòng tự động</span>
+                      <span>Bay vòng quanh tháp</span>
                     </>
                   )}
                 </button>
+                {flycamAutoOrbit && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFlycamAutoOrbit(false);
+                      setFlycamLapPct(null);
+                    }}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap shrink-0 bg-white/10 text-slate-200 hover:bg-white/20 border border-white/15 cursor-pointer"
+                  >
+                    <Pause className="w-3.5 h-3.5" />
+                    <span>Dừng bay</span>
+                  </button>
+                )}
                 {FLYCAM_WAYPOINTS.map((wp) => (
                   <button
                     key={wp.id}
@@ -691,23 +835,38 @@ export default function App() {
                 ))}
               </>
             ) : worldMode === 'masterplan' ? (
-              aerialPresets.map((preset) => {
-                const active = masterplanPreset.id === preset.id;
-                return (
-                  <button
-                    key={preset.id}
-                    type="button"
-                    onClick={() => setMasterplanPreset(preset)}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
-                      active
-                        ? 'bg-white/20 text-amber-200 border border-amber-400/40'
-                        : 'bg-white/5 text-slate-300 hover:bg-white/10 hover:text-white'
-                    }`}
-                  >
-                    {preset.label}
-                  </button>
-                );
-              })
+              <>
+                {aerialPresets.map((preset) => {
+                  const active = masterplanPreset.id === preset.id;
+                  return (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      onClick={() => {
+                        setMasterplanPreset(preset);
+                        if (preset.id === 'full_map') {
+                          setSatelliteOverlay(true);
+                        }
+                      }}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
+                        active
+                          ? 'bg-white/20 text-amber-200 border border-amber-400/40'
+                          : 'bg-white/5 text-slate-300 hover:bg-white/10 hover:text-white'
+                      }`}
+                    >
+                      {preset.label}
+                    </button>
+                  );
+                })}
+                <button
+                  type="button"
+                  onClick={handleStartHighFlycamLap}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap shrink-0 bg-sky-500/20 text-sky-200 border border-sky-400/40 hover:bg-sky-500/30 transition-colors cursor-pointer"
+                >
+                  <Video className="w-3.5 h-3.5" />
+                  <span>Flycam vòng góc cao</span>
+                </button>
+              </>
             ) : (
               activeLayout.rooms.map((room) => {
                 const active = currentRoom.id === room.id;
@@ -798,13 +957,60 @@ export default function App() {
                 </button>
               ) : null}
 
+              {worldMode === 'masterplan' && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setShowSurroundingsHighlights((v) => !v)}
+                    className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-medium whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
+                      showSurroundingsHighlights
+                        ? 'border-amber-400/60 bg-amber-500/20 text-amber-200'
+                        : 'border-white/15 bg-white/5 text-slate-300 hover:text-white'
+                    }`}
+                  >
+                    <Layers className="w-3.5 h-3.5" />
+                    <span>Nhãn địa điểm</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setSatelliteOverlay((v) => !v)}
+                    className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-medium whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
+                      satelliteOverlay
+                        ? 'border-sky-400/70 bg-sky-500/25 text-sky-100'
+                        : 'border-white/15 bg-white/5 text-slate-300 hover:text-white'
+                    }`}
+                  >
+                    <Globe className="w-3.5 h-3.5" />
+                    <span>{satelliteOverlay ? 'Đang phủ nền Map' : 'Nền Map Vệ tinh'}</span>
+                  </button>
+                </>
+              )}
+
+              <button
+                type="button"
+                onClick={() => setInfoCardVisible((v) => !v)}
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-medium whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
+                  infoCardVisible
+                    ? 'border-amber-400/50 bg-amber-500/15 text-amber-200'
+                    : 'border-white/15 bg-white/5 text-slate-300 hover:text-white'
+                }`}
+              >
+                {infoCardVisible ? (
+                  <Eye className="w-3.5 h-3.5" />
+                ) : (
+                  <EyeOff className="w-3.5 h-3.5" />
+                )}
+                <span>Thông tin (I)</span>
+              </button>
+
               <button
                 type="button"
                 onClick={() => setMapOpen(true)}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-white/15 bg-white/10 text-xs font-medium text-white hover:bg-white/15 whitespace-nowrap shrink-0 transition-colors cursor-pointer"
               >
                 <MapIcon className="w-3.5 h-3.5" />
-                <span>Mặt bằng T4–19 (M)</span>
+                <span>Mặt bằng &amp; Map (M)</span>
               </button>
             </div>
           </div>
@@ -822,18 +1028,22 @@ export default function App() {
                       : 'Kéo xoay mô hình căn hộ · Nhấn trực tiếp vào phòng để vào góc nhìn POV'}
             </span>
             <span className="hidden sm:inline font-mono-tabular">
-              F: Flycam · V: Đổi POV · M: Mặt bằng · H: Ẩn dock
+              F: Flycam · I: Bảng thông tin · M: Map · H: Ẩn dock
             </span>
           </div>
         </div>
       </div>
 
-      {/* Dual-Tab Masterplan T4-19 & Active Unit 2D Blueprint Modal */}
+      {/* Dual-Tab Masterplan T4-19, Vung Tau GPS Map & Active Unit 2D Blueprint Modal */}
       <FloorMinimapModal
         isOpen={mapOpen}
         onClose={() => setMapOpen(false)}
         worldMode={worldMode}
         telemetry={telemetry}
+        cameraBearingDeg={cameraBearingDeg}
+        satelliteOverlay={satelliteOverlay}
+        onToggleSatelliteOverlay={() => setSatelliteOverlay((v) => !v)}
+        onLookTowardBearing={handleLookTowardBearing}
         selectedUnit={selectedUnit}
         selectedFloor={selectedFloor}
         towerFilter={towerFilter}

@@ -1,5 +1,14 @@
 import { useEffect, useState } from 'react';
-import { Building2, Compass, Eye, Layers, Mountain, X } from 'lucide-react';
+import {
+  Building2,
+  Compass,
+  Eye,
+  Globe,
+  Layers,
+  MapPin,
+  Mountain,
+  X,
+} from 'lucide-react';
 import {
   RoomZone,
   getApartmentLayout,
@@ -7,7 +16,10 @@ import {
 import {
   PROJECT_UNITS,
   ProjectUnit,
+  SOLINA_GEO,
+  VUNG_TAU_MAP_LANDMARKS,
   WorldMode,
+  bearingToCompassInfo,
   formatUnitCodeForFloor,
   getUnitBalconyView,
 } from '../scene/masterplanData';
@@ -18,6 +30,10 @@ interface FloorMinimapModalProps {
   onClose: () => void;
   worldMode: WorldMode;
   telemetry: PlayerTelemetry;
+  cameraBearingDeg: number;
+  satelliteOverlay: boolean;
+  onToggleSatelliteOverlay: () => void;
+  onLookTowardBearing: (bearingDeg: number) => void;
   selectedUnit: ProjectUnit;
   selectedFloor: number;
   towerFilter: 'ALL' | 'A' | 'B';
@@ -36,6 +52,10 @@ export default function FloorMinimapModal({
   onClose,
   worldMode,
   telemetry,
+  cameraBearingDeg,
+  satelliteOverlay,
+  onToggleSatelliteOverlay,
+  onLookTowardBearing,
   selectedUnit,
   selectedFloor,
   towerFilter,
@@ -44,19 +64,27 @@ export default function FloorMinimapModal({
   onSelectUnitAndFloor,
   onSelectUnitPanorama,
 }: FloorMinimapModalProps) {
-  const [activeTab, setActiveTab] = useState<'masterplan' | 'unit'>(
+  const [activeTab, setActiveTab] = useState<'masterplan' | 'geomap' | 'unit'>(
     worldMode === 'masterplan' ? 'masterplan' : 'unit'
   );
   const [draftFloor, setDraftFloor] = useState<number>(selectedFloor);
 
   useEffect(() => {
     if (isOpen) {
-      setActiveTab(worldMode === 'masterplan' ? 'masterplan' : 'unit');
+      setActiveTab((prev) =>
+        prev === 'geomap'
+          ? 'geomap'
+          : worldMode === 'masterplan'
+            ? 'masterplan'
+            : 'unit'
+      );
       setDraftFloor(selectedFloor);
     }
   }, [isOpen, worldMode, selectedFloor]);
 
   if (!isOpen) return null;
+
+  const compassInfo = bearingToCompassInfo(cameraBearingDeg);
 
   const layout = getApartmentLayout(selectedUnit.type);
   const toSvgX = (worldX: number) => {
@@ -121,6 +149,18 @@ export default function FloorMinimapModal({
               </button>
               <button
                 type="button"
+                onClick={() => setActiveTab('geomap')}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium cursor-pointer transition-colors ${
+                  activeTab === 'geomap'
+                    ? 'bg-amber-500/90 text-slate-950 font-semibold'
+                    : 'text-slate-300 hover:text-white'
+                }`}
+              >
+                <Globe className="w-3.5 h-3.5" />
+                <span>Bản đồ Vũng Tàu (GPS)</span>
+              </button>
+              <button
+                type="button"
                 onClick={() => setActiveTab('unit')}
                 className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium cursor-pointer transition-colors ${
                   activeTab === 'unit'
@@ -144,7 +184,163 @@ export default function FloorMinimapModal({
           </div>
         </div>
 
-        {activeTab === 'masterplan' ? (
+        {activeTab === 'geomap' ? (
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 mt-5 items-start">
+            <div className="lg:col-span-8 rounded-xl border border-white/10 bg-[#0a111d] p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-300 px-1 mb-2.5">
+                <div className="flex items-center gap-2">
+                  <MapPin className="w-3.5 h-3.5 text-sky-400" />
+                  <span className="font-mono-tabular text-sky-300 font-semibold">
+                    {SOLINA_GEO.coordsLabel}
+                  </span>
+                  <span className="text-slate-400 hidden sm:inline">
+                    · {SOLINA_GEO.locationLabel}
+                  </span>
+                </div>
+                <span className="font-mono-tabular text-amber-300 font-medium">
+                  Góc nhìn 3D: {cameraBearingDeg}° {compassInfo.name} ({compassInfo.landmark})
+                </span>
+              </div>
+
+              <div className="relative w-full overflow-hidden rounded-lg border border-white/15 bg-[#07111c]">
+                <img
+                  src={SOLINA_GEO.mapImage}
+                  alt="Bản đồ vệ tinh Solina Vũng Tàu 10.3718, 107.1234"
+                  className="w-full h-auto block select-none"
+                />
+
+                {/* SVG Georeferenced Compass & Live 3D View Cone Overlay */}
+                <svg
+                  viewBox="0 0 1920 875"
+                  className="absolute inset-0 w-full h-full pointer-events-none"
+                >
+                  {/* Coastline Axis Line (48° NE <-> 228° SW through Solina) */}
+                  <line
+                    x1={845}
+                    y1={875}
+                    x2={1790}
+                    y2={0}
+                    stroke="rgba(56, 189, 248, 0.45)"
+                    strokeWidth="4"
+                    strokeDasharray="16 12"
+                  />
+
+                  {/* Live 3D Camera View Cone anchored at Solina Pin (1246, 455) */}
+                  <g
+                    transform={`translate(${SOLINA_GEO.pinNormX * 1920}, ${SOLINA_GEO.pinNormY * 875}) rotate(${cameraBearingDeg})`}
+                  >
+                    <path
+                      d="M 0 0 L -150 -310 A 340 340 0 0 1 150 -310 Z"
+                      fill="rgba(245, 189, 96, 0.36)"
+                      stroke="rgba(253, 224, 71, 0.9)"
+                      strokeWidth="3"
+                    />
+                    <circle
+                      cx={0}
+                      cy={0}
+                      r={24}
+                      fill="rgba(56, 189, 248, 0.25)"
+                      stroke="#38bdf8"
+                      strokeWidth="4"
+                    />
+                    <circle cx={0} cy={0} r={9} fill="#f5bd60" stroke="#0f1726" strokeWidth="3" />
+                  </g>
+
+                  {/* North Arrow Badge */}
+                  <g transform="translate(86, 86)">
+                    <circle cx={0} cy={0} r={44} fill="rgba(11, 18, 30, 0.85)" stroke="rgba(255,255,255,0.25)" strokeWidth="2" />
+                    <polygon points="0,-26 11,10 0,3 -11,10" fill="#f59e0b" />
+                    <text x={0} y={30} textAnchor="middle" fill="#e2e8f0" fontSize="16" fontWeight="700">
+                      BẮC (0°)
+                    </text>
+                  </g>
+                </svg>
+
+                {/* Interactive Landmark Pins on Map */}
+                {VUNG_TAU_MAP_LANDMARKS.filter((lm) => lm.id !== 'solina').map((lm) => (
+                  <button
+                    key={lm.id}
+                    type="button"
+                    onClick={() => {
+                      onLookTowardBearing(lm.bearingDeg);
+                      onClose();
+                    }}
+                    style={{
+                      left: `${lm.normX * 100}%`,
+                      top: `${lm.normY * 100}%`,
+                      transform: 'translate(-50%, -50%)',
+                    }}
+                    className="absolute px-2 py-1 rounded-md border border-sky-300/60 bg-[#0b131e]/90 text-[10px] font-medium text-sky-100 hover:bg-amber-500 hover:text-slate-950 hover:border-amber-300 shadow-lg cursor-pointer transition-colors whitespace-nowrap"
+                  >
+                    {lm.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="lg:col-span-4 flex flex-col gap-3">
+              <div className="rounded-xl border border-white/10 bg-[#0a111d] p-3.5">
+                <div className="text-xs font-semibold text-amber-200 mb-1">
+                  Đối chiếu vị trí thực tế Vũng Tàu
+                </div>
+                <p className="text-[11px] text-slate-300 leading-relaxed">
+                  Phối cảnh 3D đã căn chuẩn theo trục bờ biển{' '}
+                  <strong className="text-sky-300">138° Đông Nam</strong> tại tọa độ{' '}
+                  <span className="font-mono-tabular text-white">10.3718°N, 107.1234°E</span>:
+                  mặt tiền hướng Biển Đông, phía sau là Đ. 3 Tháng 2 (QL51C), bên phải (ĐB) là
+                  Blanca City &amp; Sun World, bên trái (TN) là Sân Golf Paradise.
+                </p>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    onToggleSatelliteOverlay();
+                    onClose();
+                  }}
+                  className={`w-full mt-3 inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold cursor-pointer transition-colors ${
+                    satelliteOverlay
+                      ? 'bg-sky-500 text-slate-950 hover:bg-sky-400'
+                      : 'border border-sky-400/50 bg-sky-500/15 text-sky-200 hover:bg-sky-500/25'
+                  }`}
+                >
+                  <Globe className="w-4 h-4" />
+                  <span>
+                    {satelliteOverlay
+                      ? 'Đang phủ nền Map 3D (Nhấn để tắt)'
+                      : 'Phủ nền Bản đồ Vệ tinh lên cảnh 3D'}
+                  </span>
+                </button>
+              </div>
+
+              <div className="rounded-xl border border-white/10 bg-[#0a111d] p-3.5">
+                <div className="text-xs font-medium text-slate-300 mb-2">
+                  Xoay nhanh góc nhìn 3D theo hướng địa danh
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  {VUNG_TAU_MAP_LANDMARKS.map((lm) => (
+                    <button
+                      key={lm.id}
+                      type="button"
+                      onClick={() => {
+                        onLookTowardBearing(lm.bearingDeg);
+                        onClose();
+                      }}
+                      className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg border border-white/10 bg-white/5 hover:border-amber-400/60 hover:bg-amber-500/15 text-left cursor-pointer transition-colors"
+                    >
+                      <div>
+                        <div className="text-xs font-medium text-white">{lm.label}</div>
+                        <div className="text-[11px] text-slate-400">{lm.distanceLabel}</div>
+                      </div>
+                      <span className="font-mono-tabular text-xs font-semibold text-amber-300 shrink-0">
+                        {lm.bearingDeg}°
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : activeTab === 'masterplan' ? (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 mt-5 items-start">
             {/* Reference Typical Floorplan Image */}
             <div className="lg:col-span-7 rounded-xl border border-white/10 bg-[#0a111d] p-3">

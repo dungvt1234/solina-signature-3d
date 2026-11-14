@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import { LightingPreset } from './apartmentData';
+import { SOLINA_GEO } from './masterplanData';
+import { buildVungTauSurroundings } from './buildVungTauSurroundings';
 
 export interface BuiltMasterplan {
   root: THREE.Group;
@@ -7,7 +9,13 @@ export interface BuiltMasterplan {
   sailboatGroup: THREE.Group;
   towerMeshes: THREE.Object3D[];
   applyLighting: (preset: LightingPreset, scene: THREE.Scene) => void;
-  updateAnimations: (elapsed: number, animateMotion: boolean) => void;
+  setSatelliteOverlay: (enabled: boolean) => void;
+  setHighlightsVisible: (enabled: boolean) => void;
+  updateAnimations: (
+    elapsed: number,
+    animateMotion: boolean,
+    cameraPos?: THREE.Vector3
+  ) => void;
   dispose: () => void;
 }
 
@@ -380,9 +388,9 @@ export function buildSolinaMasterplan(
     })
   );
 
-  // --- 1. Coastal Ground, Sandy Beach, Ocean & Waves ---
+  // --- 1. Coastal Ground, Sandy Beach, Ocean & Waves + Geo Satellite Map ---
   const siteGround = new THREE.Mesh(
-    track(new THREE.PlaneGeometry(260, 200)),
+    track(new THREE.PlaneGeometry(310, 220)),
     track(
       new THREE.MeshStandardMaterial({
         map: groundTex,
@@ -392,11 +400,66 @@ export function buildSolinaMasterplan(
     )
   );
   siteGround.rotation.x = -Math.PI / 2;
-  siteGround.position.set(0, -0.04, 78);
+  siteGround.position.set(0, -0.04, 86);
   siteGround.receiveShadow = true;
   root.add(siteGround);
 
-  // Resort landscaped podium pad
+  // Geo-calibrated Vũng Tàu Google Maps Satellite Layer (10.3718°N, 107.1234°E)
+  const satelliteMapGroup = new THREE.Group();
+  satelliteMapGroup.visible = false;
+  satelliteMapGroup.position.set(0, 0.0, -3.5);
+  satelliteMapGroup.rotation.y = (SOLINA_GEO.oceanBearingDeg * Math.PI) / 180;
+
+  const mapW = 1480;
+  const mapH = mapW * (875 / 1920);
+  const satTexture = track(
+    new THREE.TextureLoader().load(SOLINA_GEO.mapImage, (tex) => {
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+      tex.needsUpdate = true;
+    })
+  );
+  satTexture.colorSpace = THREE.SRGBColorSpace;
+  const satPlaneMat = track(
+    new THREE.MeshBasicMaterial({
+      map: satTexture,
+      color: 0xf4f6f9,
+      toneMapped: false,
+    })
+  );
+  const satPlane = new THREE.Mesh(
+    track(new THREE.PlaneGeometry(mapW, mapH)),
+    satPlaneMat
+  );
+  satPlane.rotation.x = -Math.PI / 2;
+  satPlane.position.set(
+    -(SOLINA_GEO.pinNormX - 0.5) * mapW,
+    0,
+    -(SOLINA_GEO.pinNormY - 0.5) * mapH
+  );
+  satelliteMapGroup.add(satPlane);
+  root.add(satelliteMapGroup);
+
+  // Crisp Solina Parcel Pad & Beachfront Boardwalk (used in Real-Map Mode so only the Solina site sits on the map)
+  const parcelPad = new THREE.Mesh(
+    track(new THREE.BoxGeometry(72, 0.14, 39)),
+    grassMat
+  );
+  parcelPad.position.set(0, -0.02, -1.5);
+  parcelPad.receiveShadow = true;
+  parcelPad.visible = false;
+  root.add(parcelPad);
+
+  const parcelPromenade = new THREE.Mesh(
+    track(new THREE.BoxGeometry(76, 0.14, 3.8)),
+    stoneWalkMat
+  );
+  parcelPromenade.position.set(0, 0.03, -20.2);
+  parcelPromenade.receiveShadow = true;
+  parcelPromenade.visible = false;
+  root.add(parcelPromenade);
+
+  // Resort landscaped podium pad (stylized 3D mode)
   const resortLawn = new THREE.Mesh(
     track(new THREE.BoxGeometry(82, 0.24, 42)),
     grassMat
@@ -407,7 +470,7 @@ export function buildSolinaMasterplan(
 
   // Sandy beach strip (-34 <= z <= -22)
   const beach = new THREE.Mesh(
-    track(new THREE.BoxGeometry(280, 0.22, 13)),
+    track(new THREE.BoxGeometry(310, 0.22, 13)),
     sandMat
   );
   beach.position.set(0, -0.14, -27.5);
@@ -416,12 +479,16 @@ export function buildSolinaMasterplan(
 
   // Coastal granite promenade (-22 <= z <= -18.5)
   const promenade = new THREE.Mesh(
-    track(new THREE.BoxGeometry(280, 0.14, 3.8)),
+    track(new THREE.BoxGeometry(310, 0.14, 3.8)),
     stoneWalkMat
   );
   promenade.position.set(0, 0.02, -20.2);
   promenade.receiveShadow = true;
   root.add(promenade);
+
+  // Full 3D Vũng Tàu Surrounding City, Highways, Golf Paradise, Blanca City, Sun World, Airport & Mountains
+  const vungTauSurroundings = buildVungTauSurroundings(isSoftwareGl, track);
+  root.add(vungTauSurroundings.group);
 
   // Animated Coastal Ocean with rolling directional swells, receding surf & golden sunset glint
   const oceanGeo = track(new THREE.PlaneGeometry(340, 230, 128, 96));
@@ -1396,50 +1463,66 @@ export function buildSolinaMasterplan(
   root.add(towerAGroup);
 
   // --- 7. Instanced Coastal Coconut Palms & Boulevard Street Trees ---
-  const palmPositions: [number, number, number][] = [];
-  // Coastal promenade palms
+  const parcelPalmPositions: [number, number, number][] = [];
+  const outerPalmPositions: [number, number, number][] = [];
+  // Coastal promenade palms (split parcel vs outer corridor)
   for (let px = -78; px <= 78; px += 7.2) {
-    palmPositions.push([px, -19.2, 0.95 + ((Math.abs(px) * 13) % 4) * 0.08]);
+    const entry: [number, number, number] = [
+      px,
+      -19.2,
+      0.95 + ((Math.abs(px) * 13) % 4) * 0.08,
+    ];
+    if (Math.abs(px) <= 36) parcelPalmPositions.push(entry);
+    else outerPalmPositions.push(entry);
   }
-  // Courtyard & beach edge palms
+  // Courtyard & beach edge palms inside the Solina parcel
   const gardenPalms: [number, number, number][] = [
     [24, -17, 1.05], [19, -16, 0.95], [12, -16.5, 1.1], [8, -14.5, 0.92],
     [-8.5, -14, 1.05], [-13.5, -16, 1.12], [-20, -15, 0.98], [-26, -12, 1.04],
     [7.5, -6, 0.95], [-6.5, -5.5, 0.92], [25, 2, 1.05], [-32, 6, 1.0],
     [-18, 12, 0.9], [-25.5, 13.5, 1.1], [-24.2, 14.5, 0.95], [-26.8, 12.6, 0.9],
   ];
-  gardenPalms.forEach((p) => palmPositions.push(p));
-  // Dense tropical grove behind pickleball courts & SE park (matching aerial renders)
+  gardenPalms.forEach((p) => parcelPalmPositions.push(p));
+  // Dense outer tropical grove (only shown in stylized 3D terrain mode)
   for (let i = 0; i < 64; i++) {
     const side = i < 32 ? -1 : 1;
-    const gx = side * (36 + ((i * 19) % 34));
+    const gx = side * (38 + ((i * 19) % 34));
     const gz = -15 + (((i * 23) % 32));
-    palmPositions.push([gx, gz, 0.85 + (i % 5) * 0.1]);
+    outerPalmPositions.push([gx, gz, 0.85 + (i % 5) * 0.1]);
   }
 
   const trunkGeo = track(new THREE.CylinderGeometry(0.11, 0.22, 4.4, 7));
   const frondGeo = track(new THREE.ConeGeometry(1.75, 0.9, 7));
-  const palmTrunks = new THREE.InstancedMesh(trunkGeo, palmTrunkMat, palmPositions.length);
-  const palmCrowns = new THREE.InstancedMesh(frondGeo, palmLeafMat, palmPositions.length);
-  palmPositions.forEach(([px, pz, sc], idx) => {
-    dummy.position.set(px, 2.2 * sc, pz);
-    dummy.rotation.set(0, idx * 0.9, ((idx % 3) - 1) * 0.05);
-    dummy.scale.set(sc, sc, sc);
-    dummy.updateMatrix();
-    palmTrunks.setMatrixAt(idx, dummy.matrix);
 
-    dummy.position.set(px, 4.4 * sc, pz);
-    dummy.rotation.set(0, idx * 1.1, 0);
-    dummy.scale.set(sc * 1.1, sc, sc * 1.1);
-    dummy.updateMatrix();
-    palmCrowns.setMatrixAt(idx, dummy.matrix);
-  });
-  palmTrunks.instanceMatrix.needsUpdate = true;
-  palmTrunks.computeBoundingSphere();
-  palmCrowns.instanceMatrix.needsUpdate = true;
-  palmCrowns.computeBoundingSphere();
-  palmCrowns.castShadow = !isSoftwareGl;
-  root.add(palmTrunks, palmCrowns);
+  const buildPalmInst = (list: [number, number, number][]) => {
+    const trunks = new THREE.InstancedMesh(trunkGeo, palmTrunkMat, list.length);
+    const crowns = new THREE.InstancedMesh(frondGeo, palmLeafMat, list.length);
+    list.forEach(([px, pz, sc], idx) => {
+      dummy.position.set(px, 2.2 * sc, pz);
+      dummy.rotation.set(0, idx * 0.9, ((idx % 3) - 1) * 0.05);
+      dummy.scale.set(sc, sc, sc);
+      dummy.updateMatrix();
+      trunks.setMatrixAt(idx, dummy.matrix);
+
+      dummy.position.set(px, 4.4 * sc, pz);
+      dummy.rotation.set(0, idx * 1.1, 0);
+      dummy.scale.set(sc * 1.1, sc, sc * 1.1);
+      dummy.updateMatrix();
+      crowns.setMatrixAt(idx, dummy.matrix);
+    });
+    trunks.instanceMatrix.needsUpdate = true;
+    trunks.computeBoundingSphere();
+    crowns.instanceMatrix.needsUpdate = true;
+    crowns.computeBoundingSphere();
+    crowns.castShadow = !isSoftwareGl;
+    const g = new THREE.Group();
+    g.add(trunks, crowns);
+    return g;
+  };
+
+  const parcelPalmsGroup = buildPalmInst(parcelPalmPositions);
+  const outerPalmsGroup = buildPalmInst(outerPalmPositions);
+  root.add(parcelPalmsGroup, outerPalmsGroup);
 
   // --- 8. Instanced Two-Story White Coastal Villas (Landward Neighborhood) ---
   const villaCoords: [number, number][] = [];
@@ -1482,14 +1565,14 @@ export function buildSolinaMasterplan(
   villaRoofs.computeBoundingSphere();
   root.add(villaBodies, villaRoofs);
 
-  // Warm Streetlamp Bulbs along the coastal promenade & avenue
+  // Warm Streetlamp Bulbs along the Solina coastal promenade & roundabout edge
   const lampOrbGeo = track(new THREE.SphereGeometry(0.32, 8, 8));
   const lampPoints: [number, number][] = [];
-  for (let lx = -56; lx <= 56; lx += 14) {
+  for (let lx = -30; lx <= 30; lx += 12) {
     lampPoints.push([lx, -18.5]);
   }
-  for (let lx = -40; lx <= 56; lx += 12) {
-    lampPoints.push([lx, 15.5 + lx * -0.22]);
+  for (let lx = -30; lx <= 18; lx += 12) {
+    lampPoints.push([lx, 14.5 + lx * -0.18]);
   }
   const lampInst = new THREE.InstancedMesh(lampOrbGeo, warmLedRimMat, lampPoints.length);
   lampPoints.forEach(([lx, lz], idx) => {
@@ -1510,7 +1593,7 @@ export function buildSolinaMasterplan(
     uBottomColor: { value: new THREE.Color(0x163d5c) },
   };
   const skyDome = new THREE.Mesh(
-    track(new THREE.SphereGeometry(320, 32, 20)),
+    track(new THREE.SphereGeometry(3200, 32, 20)),
     track(
       new THREE.ShaderMaterial({
         side: THREE.BackSide,
@@ -1542,10 +1625,10 @@ export function buildSolinaMasterplan(
   root.add(skyDome);
 
   const sunDisc = new THREE.Mesh(
-    track(new THREE.SphereGeometry(8.5, 24, 24)),
+    track(new THREE.SphereGeometry(48, 24, 24)),
     track(new THREE.MeshBasicMaterial({ color: 0xffe4a6 }))
   );
-  sunDisc.position.set(-48, 22, -230);
+  sunDisc.position.set(-320, 140, -1850);
   root.add(sunDisc);
 
   const hemiLight = new THREE.HemisphereLight(0x9bc7f0, 0x8f7a62, 0.55);
@@ -1573,11 +1656,15 @@ export function buildSolinaMasterplan(
 
   scene.add(root);
 
+  let activePreset: LightingPreset = 'sunrise';
+  let isSatMode = false;
+
   const applyLighting = (preset: LightingPreset, targetScene: THREE.Scene) => {
+    activePreset = preset;
     if (preset === 'sunrise') {
       // Sunset/Dusk golden hour matching renders #1 & #5
       targetScene.background = new THREE.Color(0x2a4566);
-      targetScene.fog = new THREE.FogExp2(0x6b7f96, 0.0028);
+      targetScene.fog = new THREE.FogExp2(0x6b7f96, isSatMode ? 0.00022 : 0.0024);
       skyUniforms.uTopColor.value.setHex(0x23476e);
       skyUniforms.uHorizonColor.value.setHex(0xf2be85);
       skyUniforms.uBottomColor.value.setHex(0x163d5c);
@@ -1589,6 +1676,7 @@ export function buildSolinaMasterplan(
       hemiLight.intensity = 0.48;
       oceanMat.color.setHex(0x165578);
       oceanSunGlint.value = 1.0;
+      satPlaneMat.color.setHex(0xebeff5);
       sunDisc.visible = true;
       towerGlassMat.emissiveIntensity = 0.68;
       lobbyGlowMat.emissiveIntensity = 1.55;
@@ -1603,7 +1691,7 @@ export function buildSolinaMasterplan(
     } else if (preset === 'daylight') {
       // Bright coastal daylight matching renders #2, #3 & #4
       targetScene.background = new THREE.Color(0x98cce8);
-      targetScene.fog = new THREE.FogExp2(0xaed6ec, 0.0022);
+      targetScene.fog = new THREE.FogExp2(0xaed6ec, isSatMode ? 0.00018 : 0.0018);
       skyUniforms.uTopColor.value.setHex(0x2c78b8);
       skyUniforms.uHorizonColor.value.setHex(0xd8eefc);
       skyUniforms.uBottomColor.value.setHex(0x166d9e);
@@ -1615,6 +1703,7 @@ export function buildSolinaMasterplan(
       hemiLight.intensity = 0.58;
       oceanMat.color.setHex(0x156e9c);
       oceanSunGlint.value = 0.14;
+      satPlaneMat.color.setHex(0xffffff);
       sunDisc.visible = false;
       towerGlassMat.emissiveIntensity = 0.36;
       lobbyGlowMat.emissiveIntensity = 0.5;
@@ -1629,7 +1718,7 @@ export function buildSolinaMasterplan(
     } else {
       // Coastal Night
       targetScene.background = new THREE.Color(0x0c1626);
-      targetScene.fog = new THREE.FogExp2(0x0c1626, 0.0042);
+      targetScene.fog = new THREE.FogExp2(0x0c1626, isSatMode ? 0.00035 : 0.0036);
       skyUniforms.uTopColor.value.setHex(0x070e1c);
       skyUniforms.uHorizonColor.value.setHex(0x1a2f4d);
       skyUniforms.uBottomColor.value.setHex(0x091f33);
@@ -1641,6 +1730,7 @@ export function buildSolinaMasterplan(
       hemiLight.intensity = 0.32;
       oceanMat.color.setHex(0x0c2b42);
       oceanSunGlint.value = 0.0;
+      satPlaneMat.color.setHex(0x758cad);
       sunDisc.visible = false;
       towerGlassMat.emissiveIntensity = 0.88;
       lobbyGlowMat.emissiveIntensity = 1.85;
@@ -1824,8 +1914,13 @@ export function buildSolinaMasterplan(
   });
   root.add(pedestriansGroup);
 
-  const updateAnimations = (elapsed: number, animateMotion: boolean) => {
+  const updateAnimations = (
+    elapsed: number,
+    animateMotion: boolean,
+    cameraPos?: THREE.Vector3
+  ) => {
     oceanUniforms.uTime.value = animateMotion ? elapsed : 0;
+    vungTauSurroundings.updateHighlights(elapsed, animateMotion, cameraPos);
     if (!animateMotion) return;
 
     // Gentle coastal drift & roll on sailboats
@@ -1892,12 +1987,38 @@ export function buildSolinaMasterplan(
 
   applyLighting('sunrise', scene);
 
+  const setSatelliteOverlay = (enabled: boolean) => {
+    isSatMode = enabled;
+    satelliteMapGroup.visible = enabled;
+    parcelPad.visible = enabled;
+    parcelPromenade.visible = enabled;
+    vungTauSurroundings.group.visible = true;
+
+    siteGround.visible = !enabled;
+    resortLawn.visible = !enabled;
+    beach.visible = !enabled;
+    promenade.visible = !enabled;
+    ocean.visible = !enabled;
+    avenue.visible = !enabled;
+    sideRoad.visible = !enabled;
+    villaBodies.visible = !enabled;
+    villaRoofs.visible = !enabled;
+    outerPalmsGroup.visible = !enabled;
+    applyLighting(activePreset, scene);
+  };
+
+  const setHighlightsVisible = (enabled: boolean) => {
+    vungTauSurroundings.setHighlightsVisible(enabled);
+  };
+
   return {
     root,
     oceanUniforms,
     sailboatGroup,
     towerMeshes,
     applyLighting,
+    setSatelliteOverlay,
+    setHighlightsVisible,
     updateAnimations,
     dispose: () => {
       scene.remove(hemiLight);

@@ -25,7 +25,9 @@ import {
   MasterplanCameraPreset,
   ProjectUnit,
   WorldMode,
+  compassBearingToWorldDir,
   getUnitBalconyView,
+  worldDirToCompassBearing,
 } from '../scene/masterplanData';
 import { createProceduralTextures } from '../scene/textures';
 import { createMaterialLibrary } from '../scene/furniture';
@@ -63,8 +65,13 @@ interface ApartmentCanvasProps {
   selectedFloor: number;
   masterplanPreset: MasterplanCameraPreset;
   unitPanoramaMode?: boolean;
+  satelliteOverlay?: boolean;
+  showSurroundingsHighlights?: boolean;
   flycamAutoOrbit?: boolean;
+  flycamOrbitMode?: 'close' | 'high_lap';
+  flycamLapNonce?: number;
   flycamWaypointTarget?: { waypoint: FlycamWaypoint; nonce: number } | null;
+  lookBearingTarget?: { bearingDeg: number; nonce: number } | null;
   teleportTarget: { room: RoomZone; nonce: number } | null;
   moveInputRef: React.MutableRefObject<MoveInputState>;
   onRoomChange: (room: RoomZone) => void;
@@ -73,12 +80,16 @@ interface ApartmentCanvasProps {
   onSelectTowerFromMasterplan?: (tower: 'A' | 'B', clickedFloor?: number) => void;
   onHoverTowerFloor?: (info: { tower: 'A' | 'B'; floor: number } | null) => void;
   onCancelFlycamAutoOrbit?: () => void;
+  onFlycamLapProgress?: (pct: number | null) => void;
+  onCompleteFlycamLap?: () => void;
   onAltitudeChange?: (altMeters: number) => void;
+  onMasterplanBearingChange?: (bearingDeg: number) => void;
 }
 
 // Pre-allocated math helpers (Zero GC in tick loop)
 const _forward = new THREE.Vector3();
 const _right = new THREE.Vector3();
+const _camDir = new THREE.Vector3();
 const _orbitTargetGoal = new THREE.Vector3(0, 12, -2);
 const _orbitCamGoal = new THREE.Vector3(-46, 38, 52);
 
@@ -91,8 +102,13 @@ export default function ApartmentCanvas({
   selectedFloor,
   masterplanPreset,
   unitPanoramaMode = false,
+  satelliteOverlay = false,
+  showSurroundingsHighlights = false,
   flycamAutoOrbit = false,
+  flycamOrbitMode = 'close',
+  flycamLapNonce = 0,
   flycamWaypointTarget = null,
+  lookBearingTarget = null,
   teleportTarget,
   moveInputRef,
   onRoomChange,
@@ -101,7 +117,10 @@ export default function ApartmentCanvas({
   onSelectTowerFromMasterplan,
   onHoverTowerFloor,
   onCancelFlycamAutoOrbit,
+  onFlycamLapProgress,
+  onCompleteFlycamLap,
   onAltitudeChange,
+  onMasterplanBearingChange,
 }: ApartmentCanvasProps) {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const [webglError, setWebglError] = useState(false);
@@ -114,7 +133,19 @@ export default function ApartmentCanvas({
   const floorRef = useRef<number>(selectedFloor);
   const masterPresetRef = useRef<MasterplanCameraPreset>(masterplanPreset);
   const unitPanoramaRef = useRef<boolean>(unitPanoramaMode);
+  const satelliteOverlayRef = useRef<boolean>(satelliteOverlay);
+  const highlightsVisibleRef = useRef<boolean>(showSurroundingsHighlights);
   const flycamAutoRef = useRef<boolean>(flycamAutoOrbit);
+  const flycamOrbitModeRef = useRef<'close' | 'high_lap'>(flycamOrbitMode);
+  const highLapStateRef = useRef<{
+    t: number;
+    startAngle: number;
+    completed: boolean;
+  }>({
+    t: 0,
+    startAngle: Math.PI * 0.82,
+    completed: false,
+  });
 
   const callbacksRef = useRef({
     onRoomChange,
@@ -123,7 +154,10 @@ export default function ApartmentCanvas({
     onSelectTowerFromMasterplan,
     onHoverTowerFloor,
     onCancelFlycamAutoOrbit,
+    onFlycamLapProgress,
+    onCompleteFlycamLap,
     onAltitudeChange,
+    onMasterplanBearingChange,
   });
 
   worldModeRef.current = worldMode;
@@ -134,7 +168,10 @@ export default function ApartmentCanvas({
   floorRef.current = selectedFloor;
   masterPresetRef.current = masterplanPreset;
   unitPanoramaRef.current = unitPanoramaMode;
+  satelliteOverlayRef.current = satelliteOverlay;
+  highlightsVisibleRef.current = showSurroundingsHighlights;
   flycamAutoRef.current = flycamAutoOrbit;
+  flycamOrbitModeRef.current = flycamOrbitMode;
   callbacksRef.current = {
     onRoomChange,
     onTelemetry,
@@ -142,7 +179,10 @@ export default function ApartmentCanvas({
     onSelectTowerFromMasterplan,
     onHoverTowerFloor,
     onCancelFlycamAutoOrbit,
+    onFlycamLapProgress,
+    onCompleteFlycamLap,
     onAltitudeChange,
+    onMasterplanBearingChange,
   };
 
   const povStateRef = useRef({
@@ -231,10 +271,64 @@ export default function ApartmentCanvas({
     s.targetPitch = waypoint.pitch;
   }, [flycamWaypointTarget]);
 
+  // Reset 1-lap high-altitude panoramic tour from current camera azimuth
+  useEffect(() => {
+    if (flycamLapNonce <= 0) return;
+    const s = povStateRef.current;
+    const dist = Math.hypot(s.x - 35, s.z - 25);
+    highLapStateRef.current = {
+      t: 0,
+      startAngle: dist > 60 ? Math.atan2(s.x - 35, s.z - 25) : Math.PI * 0.85,
+      completed: false,
+    };
+    s.glideActive = false;
+  }, [flycamLapNonce]);
+
+  // Orient 3D camera toward a selected Vũng Tàu map bearing
+  useEffect(() => {
+    if (!lookBearingTarget || worldModeRef.current !== 'masterplan') return;
+    const [dx, dz] = compassBearingToWorldDir(lookBearingTarget.bearingDeg);
+    const s = povStateRef.current;
+    const isManualPov =
+      unitPanoramaRef.current ||
+      Boolean(masterPresetRef.current.isPov) ||
+      Boolean(masterPresetRef.current.isFlycam);
+
+    if (isManualPov) {
+      s.targetYaw = Math.atan2(-dx, -dz);
+      if (masterPresetRef.current.isFlycam) {
+        s.glideToX = s.x;
+        s.glideToY = s.y;
+        s.glideToZ = s.z;
+        s.glideActive = true;
+      }
+    } else {
+      _orbitTargetGoal.set(0, 11, -2);
+      _orbitCamGoal.set(-dx * 62, 36, -dz * 62);
+      s.glideActive = true;
+    }
+  }, [lookBearingTarget]);
+
   // Swap 3D world when switching between Masterplan & Apartment or changing Unit/Floor
   useEffect(() => {
     rebuildWorldFnRef.current?.(worldMode, selectedUnit.type, selectedFloor);
   }, [worldMode, selectedUnit.code, selectedUnit.type, selectedFloor]);
+
+  // Toggle Vũng Tàu satellite ground map overlay dynamically
+  useEffect(() => {
+    if (worldMode === 'masterplan') {
+      worldStateRef.current.masterplan?.setSatelliteOverlay(satelliteOverlay);
+    }
+  }, [worldMode, satelliteOverlay]);
+
+  // Toggle surrounding amenities & infrastructure highlights dynamically
+  useEffect(() => {
+    if (worldMode === 'masterplan') {
+      worldStateRef.current.masterplan?.setHighlightsVisible(
+        showSurroundingsHighlights
+      );
+    }
+  }, [worldMode, showSurroundingsHighlights]);
 
   // Apply lighting preset dynamically
   useEffect(() => {
@@ -398,8 +492,8 @@ export default function ApartmentCanvas({
       if (preset.isFlycam) {
         orbit.enabled = false;
         camera.fov = 58;
-        camera.near = 0.2;
-        camera.far = 650;
+        camera.near = 0.25;
+        camera.far = 5000;
         camera.updateProjectionMatrix();
         // Smoothly take off from current camera position when switching from aerial orbit
         s.x = camera.position.x;
@@ -422,8 +516,8 @@ export default function ApartmentCanvas({
       } else if (preset.isPov) {
         orbit.enabled = false;
         camera.fov = 62;
-        camera.near = 0.12;
-        camera.far = 550;
+        camera.near = 0.14;
+        camera.far = 4500;
         camera.updateProjectionMatrix();
         s.x = preset.position[0];
         s.y = preset.position[1];
@@ -438,11 +532,11 @@ export default function ApartmentCanvas({
       } else {
         orbit.enabled = true;
         orbit.minDistance = 12;
-        orbit.maxDistance = 165;
+        orbit.maxDistance = 1600;
         orbit.maxPolarAngle = Math.PI * 0.48;
         camera.fov = 46;
-        camera.near = 0.25;
-        camera.far = 650;
+        camera.near = 0.4;
+        camera.far = 5000;
         camera.updateProjectionMatrix();
         _orbitCamGoal.set(...preset.position);
         _orbitTargetGoal.set(...preset.target);
@@ -459,8 +553,8 @@ export default function ApartmentCanvas({
       const view = getUnitBalconyView(unit, floor);
       const s = povStateRef.current;
       orbit.enabled = false;
-      camera.near = 0.16;
-      camera.far = 650;
+      camera.near = 0.18;
+      camera.far = 5000;
 
       const unitChanged = lastPanoramaUnitRef.current !== unit.code;
       if (unitChanged) {
@@ -533,6 +627,8 @@ export default function ApartmentCanvas({
         const mp = buildSolinaMasterplan(scene, renderer, isSoftwareGl);
         worldStateRef.current.masterplan = mp;
         mp.applyLighting(lightingRef.current, scene);
+        mp.setSatelliteOverlay(satelliteOverlayRef.current);
+        mp.setHighlightsVisible(highlightsVisibleRef.current);
         if (gtaoPass) gtaoPass.enabled = false;
 
         if (unitPanoramaRef.current) {
@@ -862,7 +958,8 @@ export default function ApartmentCanvas({
       if (worldStateRef.current.masterplan) {
         worldStateRef.current.masterplan.updateAnimations(
           elapsed,
-          !prefersReducedMotion
+          !prefersReducedMotion,
+          camera.position
         );
       }
       if (worldStateRef.current.apartment) {
@@ -909,32 +1006,71 @@ export default function ApartmentCanvas({
         camera.rotation.set(s.pitch, s.yaw, 0, 'YXZ');
       } else if (isFlycamActive()) {
         if (flycamAutoRef.current && !s.glideActive) {
-          // Cinematic Flycam Orbit Tour around Towers A & B, Lagoon Pool & Coastline
-          const tourAngle = elapsed * 0.14;
-          const goalX = Math.sin(tourAngle) * 56;
-          const goalZ = -4 + Math.cos(tourAngle) * 50;
-          const goalY = 27 + Math.sin(tourAngle * 2.0) * 9;
-          const dampF = prefersReducedMotion ? 1 : 2.6;
-          s.x = THREE.MathUtils.damp(s.x, goalX, dampF, delta);
-          s.y = THREE.MathUtils.damp(s.y, goalY, dampF, delta);
-          s.z = THREE.MathUtils.damp(s.z, goalZ, dampF, delta);
+          if (flycamOrbitModeRef.current === 'high_lap') {
+            // High-altitude 1-lap 360° panoramic flycam around Solina & Vũng Tàu peninsula
+            const lap = highLapStateRef.current;
+            const lapDurationSec = 26.0;
+            lap.t = Math.min(1, lap.t + delta / lapDurationSec);
+            // Smooth ease-in & ease-out across the full 360° circle
+            const eased = lap.t * lap.t * (3 - 2 * lap.t);
+            const angle = lap.startAngle + eased * Math.PI * 2;
+            const goalX = 35 + Math.sin(angle) * 360;
+            const goalZ = 25 + Math.cos(angle) * 310;
+            const goalY = 245 + Math.sin(eased * Math.PI * 2) * 28;
+            const dampF = prefersReducedMotion ? 1 : 2.6;
+            s.x = THREE.MathUtils.damp(s.x, goalX, dampF, delta);
+            s.y = THREE.MathUtils.damp(s.y, goalY, dampF, delta);
+            s.z = THREE.MathUtils.damp(s.z, goalZ, dampF, delta);
 
-          const dx = 0 - s.x;
-          const dy = 11 - s.y;
-          const dz = -2 - s.z;
-          const lookYaw = Math.atan2(-dx, -dz);
-          const lookPitch = Math.atan2(dy, Math.hypot(dx, dz));
-          // Shortest angle wrap for yaw
-          let diff = lookYaw - s.yaw;
-          while (diff > Math.PI) diff -= Math.PI * 2;
-          while (diff < -Math.PI) diff += Math.PI * 2;
-          s.yaw += diff * (1 - Math.exp(-3.5 * delta));
-          s.pitch = THREE.MathUtils.damp(s.pitch, lookPitch, 3.5, delta);
-          s.targetYaw = s.yaw;
-          s.targetPitch = s.pitch;
+            const dx = 30 - s.x;
+            const dy = 10 - s.y;
+            const dz = 18 - s.z;
+            const lookYaw = Math.atan2(-dx, -dz);
+            const lookPitch = Math.atan2(dy, Math.hypot(dx, dz));
+            let diff = lookYaw - s.yaw;
+            while (diff > Math.PI) diff -= Math.PI * 2;
+            while (diff < -Math.PI) diff += Math.PI * 2;
+            s.yaw += diff * (1 - Math.exp(-3.4 * delta));
+            s.pitch = THREE.MathUtils.damp(s.pitch, lookPitch, 3.4, delta);
+            s.targetYaw = s.yaw;
+            s.targetPitch = s.pitch;
 
-          camera.position.set(s.x, s.y, s.z);
-          camera.rotation.set(s.pitch, s.yaw, 0, 'YXZ');
+            camera.position.set(s.x, s.y, s.z);
+            camera.rotation.set(s.pitch, s.yaw, 0, 'YXZ');
+
+            if (lap.t >= 1 && !lap.completed) {
+              lap.completed = true;
+              callbacksRef.current.onFlycamLapProgress?.(100);
+              callbacksRef.current.onCompleteFlycamLap?.();
+            }
+          } else {
+            // Cinematic Flycam Orbit Tour around Towers A & B, Lagoon Pool & Coastline
+            const tourAngle = elapsed * 0.14;
+            const goalX = Math.sin(tourAngle) * 56;
+            const goalZ = -4 + Math.cos(tourAngle) * 50;
+            const goalY = 27 + Math.sin(tourAngle * 2.0) * 9;
+            const dampF = prefersReducedMotion ? 1 : 2.6;
+            s.x = THREE.MathUtils.damp(s.x, goalX, dampF, delta);
+            s.y = THREE.MathUtils.damp(s.y, goalY, dampF, delta);
+            s.z = THREE.MathUtils.damp(s.z, goalZ, dampF, delta);
+
+            const dx = 0 - s.x;
+            const dy = 11 - s.y;
+            const dz = -2 - s.z;
+            const lookYaw = Math.atan2(-dx, -dz);
+            const lookPitch = Math.atan2(dy, Math.hypot(dx, dz));
+            // Shortest angle wrap for yaw
+            let diff = lookYaw - s.yaw;
+            while (diff > Math.PI) diff -= Math.PI * 2;
+            while (diff < -Math.PI) diff += Math.PI * 2;
+            s.yaw += diff * (1 - Math.exp(-3.5 * delta));
+            s.pitch = THREE.MathUtils.damp(s.pitch, lookPitch, 3.5, delta);
+            s.targetYaw = s.yaw;
+            s.targetPitch = s.pitch;
+
+            camera.position.set(s.x, s.y, s.z);
+            camera.rotation.set(s.pitch, s.yaw, 0, 'YXZ');
+          }
         } else if (s.glideActive) {
           const factor = prefersReducedMotion ? 1 : 5.5;
           s.x = THREE.MathUtils.damp(s.x, s.glideToX, factor, delta);
@@ -1006,10 +1142,10 @@ export default function ApartmentCanvas({
             flycamScrollVel *= Math.exp(-8.5 * delta);
           }
 
-          // Clamp drone safely within coastal airspace
-          s.x = THREE.MathUtils.clamp(s.x, -145, 145);
-          s.y = THREE.MathUtils.clamp(s.y, 2.4, 115);
-          s.z = THREE.MathUtils.clamp(s.z, -165, 130);
+          // Clamp drone safely within coastal Vũng Tàu airspace
+          s.x = THREE.MathUtils.clamp(s.x, -850, 1050);
+          s.y = THREE.MathUtils.clamp(s.y, 2.4, 1200);
+          s.z = THREE.MathUtils.clamp(s.z, -750, 980);
 
           camera.position.set(s.x, s.y, s.z);
           camera.rotation.set(s.pitch, s.yaw, 0, 'YXZ');
@@ -1118,8 +1254,24 @@ export default function ApartmentCanvas({
             yaw: s.yaw,
             currentRoom: room,
           });
-        } else if (isFlycamActive()) {
-          callbacksRef.current.onAltitudeChange?.(Math.round(s.y * 10) / 10);
+        } else {
+          camera.getWorldDirection(_camDir);
+          const bearing = Math.round(
+            worldDirToCompassBearing(_camDir.x, _camDir.z)
+          );
+          callbacksRef.current.onMasterplanBearingChange?.(bearing);
+          if (isFlycamActive()) {
+            callbacksRef.current.onAltitudeChange?.(Math.round(s.y * 10) / 10);
+            if (flycamAutoRef.current && flycamOrbitModeRef.current === 'high_lap') {
+              callbacksRef.current.onFlycamLapProgress?.(
+                Math.round(highLapStateRef.current.t * 100)
+              );
+            } else {
+              callbacksRef.current.onFlycamLapProgress?.(null);
+            }
+          } else {
+            callbacksRef.current.onFlycamLapProgress?.(null);
+          }
         }
       }
 

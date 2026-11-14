@@ -8,6 +8,8 @@ export interface MasterplanCameraPreset {
     | 'nw_coast'
     | 'ocean_front'
     | 'pool_courtyard'
+    | 'vungtau_city'
+    | 'full_map'
     | 'landscape_pov'
     | 'flycam';
   label: string;
@@ -40,10 +42,139 @@ export interface FlycamWaypoint {
   pitch: number;
 }
 
+export const SOLINA_GEO = {
+  lat: 10.371829254703332,
+  lng: 107.12343251489503,
+  coordsLabel: '10.3718° N, 107.1234° E',
+  locationLabel: 'Bãi Chí Linh · Đ. 3 Tháng 2 (QL51C), TP. Vũng Tàu',
+  // In masterplan local space, -Z points straight offshore to Biển Đông (~138° SE on Google Maps)
+  oceanBearingDeg: 138,
+  mapImage: './assets/aistudio/image_18151cc4.png',
+  // Exact pixel position of the "Solina Vũng Tàu" pin in the 1920x875 reference map
+  pinNormX: 0.649,
+  pinNormY: 0.52,
+} as const;
+
+export function worldDirToCompassBearing(dx: number, dz: number): number {
+  const relDeg = (Math.atan2(dx, -dz) * 180) / Math.PI;
+  return (((SOLINA_GEO.oceanBearingDeg + relDeg) % 360) + 360) % 360;
+}
+
+export function compassBearingToWorldDir(bearingDeg: number): [number, number] {
+  const rad = ((bearingDeg - SOLINA_GEO.oceanBearingDeg) * Math.PI) / 180;
+  return [Math.sin(rad), -Math.cos(rad)];
+}
+
+export function bearingToCompassInfo(deg: number): {
+  short: string;
+  name: string;
+  landmark: string;
+} {
+  const d = ((deg % 360) + 360) % 360;
+  if (d >= 337.5 || d < 22.5) {
+    return { short: 'B', name: 'Bắc', landmark: 'QL51B · Khu Phước Sơn' };
+  }
+  if (d < 67.5) {
+    return { short: 'ĐB', name: 'Đông Bắc', landmark: 'Blanca City · Sun World Aqua' };
+  }
+  if (d < 112.5) {
+    return { short: 'Đ', name: 'Đông', landmark: 'Biển Đông · Bãi tắm Nòng Nọc' };
+  }
+  if (d < 157.5) {
+    return { short: 'ĐN', name: 'Đông Nam', landmark: 'Biển Đông · Bãi Chí Linh' };
+  }
+  if (d < 202.5) {
+    return { short: 'N', name: 'Nam', landmark: 'Biển Đông · Hướng Bãi Sau' };
+  }
+  if (d < 247.5) {
+    return { short: 'TN', name: 'Tây Nam', landmark: 'Golf Paradise · Vias Hotel' };
+  }
+  if (d < 292.5) {
+    return { short: 'T', name: 'Tây', landmark: 'Sân bay Vũng Tàu · Núi Lớn' };
+  }
+  return { short: 'TB', name: 'Tây Bắc', landmark: 'Đ. 3 Tháng 2 (QL51C) · KDC P.10' };
+}
+
+export interface VungTauMapLandmark {
+  id: string;
+  label: string;
+  bearingDeg: number;
+  distanceLabel: string;
+  normX: number;
+  normY: number;
+}
+
+export const VUNG_TAU_MAP_LANDMARKS: VungTauMapLandmark[] = [
+  {
+    id: 'solina',
+    label: 'Solina Vũng Tàu (Tâm dự án)',
+    bearingDeg: 138,
+    distanceLabel: '0 m',
+    normX: 0.649,
+    normY: 0.52,
+  },
+  {
+    id: 'ocean_se',
+    label: 'Biển Đông · Bãi Chí Linh',
+    bearingDeg: 138,
+    distanceLabel: 'Trực diện biển',
+    normX: 0.72,
+    normY: 0.62,
+  },
+  {
+    id: 'sunworld_ne',
+    label: 'Blanca City & Sun World Aqua',
+    bearingDeg: 48,
+    distanceLabel: '~1.4 km Đông Bắc',
+    normX: 0.75,
+    normY: 0.29,
+  },
+  {
+    id: 'paradise_sw',
+    label: 'Sân Golf Paradise & Vias Hotel',
+    bearingDeg: 228,
+    distanceLabel: '~1.8 km Tây Nam',
+    normX: 0.46,
+    normY: 0.81,
+  },
+  {
+    id: 'highway_nw',
+    label: 'Đ. 3 Tháng 2 (QL51C)',
+    bearingDeg: 318,
+    distanceLabel: '~450 m Tây Bắc',
+    normX: 0.6,
+    normY: 0.4,
+  },
+  {
+    id: 'hospital_n',
+    label: 'Bệnh viện Đa khoa Vũng Tàu',
+    bearingDeg: 10,
+    distanceLabel: '~2.6 km Bắc',
+    normX: 0.705,
+    normY: 0.065,
+  },
+  {
+    id: 'airport_w',
+    label: 'Sân bay Vũng Tàu',
+    bearingDeg: 280,
+    distanceLabel: '~3.5 km Tây',
+    normX: 0.381,
+    normY: 0.448,
+  },
+  {
+    id: 'port_nw',
+    label: 'Cảng PTSC & Núi Lớn',
+    bearingDeg: 295,
+    distanceLabel: '~5.2 km Tây Bắc',
+    normX: 0.255,
+    normY: 0.228,
+  },
+];
+
 export const FLYCAM_WAYPOINTS: FlycamWaypoint[] = [
   {
     id: 'ocean_glide',
-    label: 'Lướt mặt biển',
+    label: 'Lướt Biển Đông (ĐN)',
     position: [0, 12, -62],
     yaw: Math.PI,
     pitch: -0.08,
@@ -64,34 +195,48 @@ export const FLYCAM_WAYPOINTS: FlycamWaypoint[] = [
   },
   {
     id: 'se_roundabout',
-    label: 'Bùng binh & Biệt thự',
+    label: 'Hướng Đ. 3 Tháng 2',
     position: [-44, 26, 38],
     yaw: -0.83,
     pitch: -0.24,
+  },
+  {
+    id: 'vungtau_panorama',
+    label: 'Toàn cảnh Vũng Tàu',
+    position: [135, 138, -210],
+    yaw: -2.62,
+    pitch: -0.34,
+  },
+  {
+    id: 'full_map_flycam',
+    label: 'Toàn map (1020m)',
+    position: [365, 1020, -69],
+    yaw: 2.386,
+    pitch: -1.279,
   },
 ];
 
 export const MASTERPLAN_CAMERA_PRESETS: MasterplanCameraPreset[] = [
   {
     id: 'se_sunset',
-    label: 'Toàn khu Đông Nam',
-    subtitle: '2 Tháp A–B, bùng binh đón khách & dãy biệt thự ven biển',
+    label: 'Phía Đ. 3 Tháng 2',
+    subtitle: 'Nhìn từ phía đất liền QL51C ra Tháp A–B & Biển Đông (ĐN)',
     isPov: false,
     position: [-46, 38, 52],
     target: [0, 12, -2],
   },
   {
     id: 'nw_coast',
-    label: 'Góc Tây Bắc',
-    subtitle: 'Tháp B giật cấp vườn mái & toàn tuyến bờ biển',
+    label: 'Phía Golf Paradise (TN)',
+    subtitle: 'Góc Tây Nam nhìn Tháp B giật cấp vườn mái & bờ biển Chí Linh',
     isPov: false,
     position: [56, 42, 42],
     target: [0, 13, -4],
   },
   {
     id: 'ocean_front',
-    label: 'Từ biển nhìn vào',
-    subtitle: 'Mặt đứng biển, hồ bơi trung tâm & tháp đôi Solina',
+    label: 'Từ Biển Đông nhìn vào',
+    subtitle: 'Hướng Đông Nam nhìn trực diện mặt biển, hồ Lagoon & tháp đôi',
     isPov: false,
     position: [-44, 34, -66],
     target: [0, 13, 2],
@@ -99,15 +244,31 @@ export const MASTERPLAN_CAMERA_PRESETS: MasterplanCameraPreset[] = [
   {
     id: 'pool_courtyard',
     label: 'Hồ bơi & Tiện ích',
-    subtitle: 'Lagoon pool, chòi đèn giọt nước, sân Pickleball & cảnh quan',
+    subtitle: 'Lagoon pool giữa 2 tháp, chòi đèn giọt nước & sân Pickleball',
     isPov: false,
     position: [2, 15, -36],
     target: [0, 3.5, -2],
   },
   {
+    id: 'vungtau_city',
+    label: 'Toàn cảnh Vũng Tàu',
+    subtitle: 'Blanca City, Sun World, Đ. 3/2, Golf Paradise, Sân bay & Núi Lớn',
+    isPov: false,
+    position: [90, 118, 175],
+    target: [25, 8, 15],
+  },
+  {
+    id: 'full_map',
+    label: 'Toàn map',
+    subtitle: 'Bao quát trọn bản đồ Vũng Tàu: Cần Giờ – Núi Lớn – Solina – Đồi Nhái',
+    isPov: false,
+    position: [365, 1060, -79],
+    target: [155, 0, 154],
+  },
+  {
     id: 'landscape_pov',
     label: 'Dạo bộ cảnh quan',
-    subtitle: 'Góc nhìn người đi bộ quanh hồ bơi & đường dạo ven biển',
+    subtitle: 'Góc nhìn người đi bộ quanh hồ bơi & đường dạo ven biển Chí Linh',
     isPov: true,
     position: [-4.5, 1.68, -21.5],
     target: [2, 2.8, -6],
@@ -117,7 +278,7 @@ export const MASTERPLAN_CAMERA_PRESETS: MasterplanCameraPreset[] = [
   {
     id: 'flycam',
     label: 'Flycam 360°',
-    subtitle: 'Bay tự do mọi độ cao · Kéo xoay, WASD bay & E/Q lên xuống',
+    subtitle: 'Bay tự do quanh tọa độ 10.3718°N, 107.1234°E · WASD bay & E/Q lên xuống',
     isPov: false,
     isFlycam: true,
     position: [-26, 26, -52],
@@ -136,7 +297,7 @@ export const PROJECT_UNITS: ProjectUnit[] = [
     nsa: '85,72 m²',
     defaultFloor: 11,
     maxFloor: 34,
-    wingLabel: 'Căn góc Nam · Hướng biển & Bình minh',
+    wingLabel: 'Đông Nam · Trực diện Biển Đông & Bãi Chí Linh',
     accentColor: '#d99b52',
   },
   {
@@ -147,7 +308,7 @@ export const PROJECT_UNITS: ProjectUnit[] = [
     nsa: '75,49 m²',
     defaultFloor: 18,
     maxFloor: 34,
-    wingLabel: 'Cánh Bắc · View toàn vịnh',
+    wingLabel: 'Đông Nam · Ôm trọn hồ Lagoon & Biển Đông',
     accentColor: '#d99b52',
   },
   {
@@ -158,7 +319,7 @@ export const PROJECT_UNITS: ProjectUnit[] = [
     nsa: '46,16 m²',
     defaultFloor: 14,
     maxFloor: 30,
-    wingLabel: 'Cánh Trung tâm · 1PN+ đa năng',
+    wingLabel: 'Đông Nam · Trung tâm nội khu hướng biển',
     accentColor: '#c9886b',
   },
   {
@@ -169,7 +330,7 @@ export const PROJECT_UNITS: ProjectUnit[] = [
     nsa: '46,08 m²',
     defaultFloor: 9,
     maxFloor: 26,
-    wingLabel: 'Cánh Tây · Ban công cong hướng biển',
+    wingLabel: 'Tây Nam · Hướng Golf Paradise, Vias & Bãi Sau',
     accentColor: '#c9886b',
   },
   {
@@ -180,7 +341,7 @@ export const PROJECT_UNITS: ProjectUnit[] = [
     nsa: '34,35 m²',
     defaultFloor: 12,
     maxFloor: 34,
-    wingLabel: 'Cánh dọc Biển · Studio nghỉ dưỡng',
+    wingLabel: 'Đông · Nhìn hồ Lagoon, Tháp A & Blanca City',
     accentColor: '#b99c7b',
   },
   {
@@ -191,7 +352,7 @@ export const PROJECT_UNITS: ProjectUnit[] = [
     nsa: '79,35 m²',
     defaultFloor: 9,
     maxFloor: 21,
-    wingLabel: 'Tháp A Góc Biển · Ban công vòng cung',
+    wingLabel: 'Đông Nam · Mũi cong biển Chí Linh & Sun World',
     accentColor: '#d99b52',
   },
   {
@@ -202,7 +363,7 @@ export const PROJECT_UNITS: ProjectUnit[] = [
     nsa: '60,30 m²',
     defaultFloor: 6,
     maxFloor: 21,
-    wingLabel: 'Tháp A · View hồ bơi & đại dương',
+    wingLabel: 'Nam / Tây Nam · Hồ bơi Lagoon & Tháp B 34F',
     accentColor: '#c9886b',
   },
   {
@@ -213,7 +374,7 @@ export const PROJECT_UNITS: ProjectUnit[] = [
     nsa: '29,02 m²',
     defaultFloor: 10,
     maxFloor: 21,
-    wingLabel: 'Tháp A · Studio hướng Đông Nam',
+    wingLabel: 'Đông Bắc · Hướng Blanca City, Sun World & Biển Đông',
     accentColor: '#b99c7b',
   },
 ];
@@ -293,7 +454,7 @@ export function getUnitBalconyView(
         yaw: localDirToYaw(bCoastRot, -0.32, -0.95),
         pitch: -0.14,
         altMeters,
-        viewSummary: 'Trực diện biển, hồ Lagoon, Tháp A & dải cát ven bờ',
+        viewSummary: 'Đông Nam (138°) · Trực diện Biển Đông, hồ Lagoon & Tháp A',
       };
     }
     const [wx, wz] = localToWorld(bWingCx, bWingCz, bWingRot, 3.2, -5.6);
@@ -302,7 +463,7 @@ export function getUnitBalconyView(
       yaw: localDirToYaw(bWingRot, -0.25, -0.97),
       pitch: -0.22,
       altMeters,
-      viewSummary: 'Tầm nhìn cao tầng qua vườn mái giật cấp, hồ bơi & biển',
+      viewSummary: 'Tầng cao hướng Đông Nam · Vườn mái giật cấp & Biển Chí Linh',
     };
   }
 
@@ -313,7 +474,7 @@ export function getUnitBalconyView(
       yaw: localDirToYaw(bWingRot, -0.16, -0.99),
       pitch: -0.17,
       altMeters,
-      viewSummary: 'Ôm trọn hồ bơi Lagoon, Tháp A & toàn cảnh vịnh biển',
+      viewSummary: 'Đông Nam · Ôm trọn hồ Lagoon, Tháp A & Biển Đông',
     };
   }
 
@@ -324,7 +485,7 @@ export function getUnitBalconyView(
       yaw: localDirToYaw(bWingRot, -0.12, -0.99),
       pitch: -0.16,
       altMeters,
-      viewSummary: 'Chính giữa nội khu hướng hồ Lagoon & mặt biển',
+      viewSummary: 'Đông Nam · Chính giữa nội khu nhìn thẳng Biển Chí Linh',
     };
   }
 
@@ -336,7 +497,7 @@ export function getUnitBalconyView(
         yaw: localDirToYaw(bCoastRot, 0.86, -0.51),
         pitch: -0.16,
         altMeters,
-        viewSummary: 'Cánh Tây nhìn xuống sân Pickleball, rừng dừa & bờ biển Tây Bắc',
+        viewSummary: 'Tây Nam (228°) · Sân Pickleball, Golf Paradise & Bãi Sau',
       };
     }
     const [wx, wz] = localToWorld(bWingCx, bWingCz, bWingRot, 5.6, -5.2);
@@ -345,7 +506,7 @@ export function getUnitBalconyView(
       yaw: localDirToYaw(bWingRot, 0.65, -0.76),
       pitch: -0.22,
       altMeters,
-      viewSummary: 'View cao tầng sân Pickleball & đường bờ biển phía Bắc',
+      viewSummary: 'Tầng cao Tây Nam · Toàn cảnh Golf Paradise & bờ biển Vũng Tàu',
     };
   }
 
@@ -357,7 +518,7 @@ export function getUnitBalconyView(
         yaw: localDirToYaw(bCoastRot, -0.82, -0.57),
         pitch: -0.16,
         altMeters,
-        viewSummary: 'Cánh dọc biển nhìn sang hồ Lagoon, Tháp A & bùng binh',
+        viewSummary: 'Đông · Hồ Lagoon, Tháp A & dải biển hướng Blanca City',
       };
     }
     const [wx, wz] = localToWorld(bWingCx, bWingCz, bWingRot, -6.2, -5.6);
@@ -366,7 +527,7 @@ export function getUnitBalconyView(
       yaw: localDirToYaw(bWingRot, -0.45, -0.89),
       pitch: -0.22,
       altMeters,
-      viewSummary: 'View tầng cao nhìn bao quát cụm hồ bơi, Tháp A & đại dương',
+      viewSummary: 'Tầng cao hướng Đông · Toàn cảnh hồ bơi, Tháp A & Biển Đông',
     };
   }
 
@@ -377,7 +538,7 @@ export function getUnitBalconyView(
       yaw: localDirToYaw(aRot, -0.58, -0.81),
       pitch: -0.13,
       altMeters,
-      viewSummary: 'Mũi cong hướng biển trực diện, thuyền buồm & bãi cát trắng',
+      viewSummary: 'Đông / Đông Nam · Mũi cong hướng Biển Đông & Blanca City',
     };
   }
 
@@ -388,18 +549,18 @@ export function getUnitBalconyView(
       yaw: localDirToYaw(aRot, 0.94, -0.34),
       pitch: -0.15,
       altMeters,
-      viewSummary: 'Nhìn thẳng qua hồ bơi Lagoon, chòi đèn & Tháp B 34 tầng',
+      viewSummary: 'Nam / Tây Nam · Hồ bơi Lagoon, Tháp B 34F & Bãi Chí Linh',
     };
   }
 
-  // A.10.04 (SE Drop-off Roundabout & SE Coastline)
+  // A.10.04 (NE / E facing Blanca City, Sun World & SE Roundabout)
   const [wx, wz] = localToWorld(aCx, aCz, aRot, -6.6, 2.2);
   return {
     position: [wx, y, wz],
     yaw: localDirToYaw(aRot, -0.85, 0.52),
     pitch: -0.16,
     altMeters,
-    viewSummary: 'Hướng Đông Nam nhìn xuống bùng binh đón khách, đại lộ & biển',
+    viewSummary: 'Đông Bắc (48°) · Bùng binh đón khách, hướng Sun World & Blanca City',
   };
 }
 
